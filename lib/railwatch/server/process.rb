@@ -69,7 +69,10 @@ module Railwatch
       # Called every poll: starts the server when it is not running and its
       # backoff has passed. Loud when it had died.
       def ensure_running
-        return if alive?
+        if alive?
+          took_over if @standby
+          return
+        end
 
         if @pid
           @failures += 1
@@ -86,10 +89,21 @@ module Railwatch
 
       def start
         stop_orphan
+        # Another server already answers on the port: another app process
+        # on this host (a second Puma, the old container of a deploy) whose
+        # server owns the data dir. Ours will wait on serve.lock and take
+        # over when that one exits; meanwhile every agent reports to it.
+        @standby = up?
         log = File.open(@data_dir.log_file, "a")
         @pid = ::Process.spawn(env, @binary, "serve", chdir: @data_dir.path.to_s, in: File::NULL, out: log, err: log, pgroup: true)
         log.close
-        File.write(@data_dir.path.join("server.pid"), "#{@pid} #{::Process.pid}\n")
+        if @standby
+          @log.call("Railwatch server (pid #{@pid}) on standby: another server already answers on 127.0.0.1:#{@config.port} " \
+                    "and owns #{@data_dir.path}; this one waits for its serve.lock and takes over when it exits. " \
+                    "Until then this process's agent reports to that server.")
+          return
+        end
+        write_pid_file
         started = monotonic
         @log.call("Railwatch server starting (pid #{@pid}, 127.0.0.1:#{@config.port}, data #{@data_dir.path}, log #{@data_dir.log_file})")
         if wait_until_ready(started)
@@ -131,6 +145,26 @@ module Railwatch
       end
 
       private
+
+      def up?
+        Net::HTTP.get_response(URI("#{@config.local_url}/up")).is_a?(Net::HTTPSuccess)
+      rescue SystemCallError, IOError, Net::OpenTimeout, Net::ReadTimeout
+        false
+      end
+
+      def write_pid_file
+        File.write(@data_dir.path.join("server.pid"), "#{@pid} #{::Process.pid}\n")
+      end
+
+      # The other server exited (it deletes server.pid on a clean stop) and
+      # ours, holding serve.lock now, answers on the port.
+      def took_over
+        return if @data_dir.path.join("server.pid").exist? || !up?
+
+        @standby = false
+        write_pid_file
+        @log.call("Railwatch server (pid #{@pid}) took over #{@data_dir.path}: the previous server exited")
+      end
 
       def wait_until_ready(started)
         uri = URI("#{@config.local_url}/up")
