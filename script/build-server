@@ -39,7 +39,9 @@ for platform in $platforms; do
     -v "$src:/src:ro" -w /src "$IMAGE" \
     sh -c "PATH=/usr/local/cargo/bin:\$PATH cargo zigbuild --release --locked -p railwatch-server --bin railwatch --target $target"
   mkdir -p "$root/exe/$platform"
-  cp "$cache/target/$target/release/railwatch" "$root/exe/$platform/railwatch"
-  chmod 0755 "$root/exe/$platform/railwatch"
+  # Rename into place: a running server keeps its (old) inode.
+  cp "$cache/target/$target/release/railwatch" "$root/exe/$platform/railwatch.new"
+  chmod 0755 "$root/exe/$platform/railwatch.new"
+  mv -f "$root/exe/$platform/railwatch.new" "$root/exe/$platform/railwatch"
   file "$root/exe/$platform/railwatch" || true
 done
