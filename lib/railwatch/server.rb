@@ -40,7 +40,10 @@ module Railwatch
       # the agent is left alone: a token set (RAILWATCH_TOKEN or the
       # initializer), or the embedded store (`transport = :local`).
       def agent_configured_elsewhere?
-        Railwatch.config.local? || Railwatch.config.token.to_s.strip != ""
+        return true if Railwatch.config.local?
+        return false if Railwatch.config.ingest_url == config.local_url
+
+        Railwatch.config.token.to_s.strip != ""
       end
 
       # Once per data dir, before anything needs the token: `railwatch setup`

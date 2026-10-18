@@ -57,9 +57,20 @@ Puma::Plugin.create do
 
   # The app's own reporter first, while the server still listens: the last
   # requests' records (and in single mode, every request's) go out now.
+  #
+  # Under `bin/rails server` the app loads before Puma starts this plugin,
+  # so this at_exit was registered after the railwatch gem's and runs
+  # BEFORE them (at_exit is LIFO). Those stop the health sampler and flush
+  # the session tracker, which emits records; run them here first, so their
+  # records are in the final flush rather than produced after the server is
+  # gone. Each stop! is idempotent; the gem's own at_exit then does nothing.
   def shutdown
     @shutting_down = true
     if defined?(::Railwatch) && ::Railwatch.respond_to?(:enabled?) && ::Railwatch.enabled? && !::Railwatch.config.local?
+      [ "Health", "Sessions", "Maintenance", "Export::Sender" ].each do |name|
+        mod = ::Railwatch.const_get(name) if ::Railwatch.const_defined?(name)
+        mod.stop! if mod.respond_to?(:stop!)
+      end
       ::Railwatch.reporter.shutdown
     end
     stop_server
