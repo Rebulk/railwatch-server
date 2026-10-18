@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# Builds the `railwatch` binaries this gem bundles, from a railwatch-rs
+# checkout with rust-patches/ applied, into exe/<platform>/railwatch.
+#
+#   script/build-server /path/to/railwatch-rs [platform...]
+#
+# Platforms: x86_64-linux aarch64-linux x86_64-darwin arm64-darwin (default:
+# all four). The checkout's frontend/dist must be built already (bin/build
+# with SKIP_CARGO=1). Linux builds use bin/release's digest-pinned
+# cargo-zigbuild image (static musl); macOS builds use the same image's
+# MacOSX SDK, unsigned (see README, "macOS").
+set -euo pipefail
+
+src=${1:?usage: script/build-server /path/to/railwatch-rs [platform...]}
+shift
+platforms=${*:-x86_64-linux aarch64-linux x86_64-darwin arm64-darwin}
+src=$(cd "$src" && pwd)
+root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+IMAGE=ghcr.io/rust-cross/cargo-zigbuild@sha256:d8313491ec5798de0633fdc1c5753761bff79967bea69076020dc78121b2cca8
+cache=${BUILD_CACHE:-/var/tmp/railwatch-server-build}
+mkdir -p "$cache"/{registry,git,target,home}
+
+[ -f "$src/frontend/dist/.vite/manifest.json" ] || { echo "build-server: $src/frontend/dist is missing (bin/build with SKIP_CARGO=1)" >&2; exit 1; }
+
+for platform in $platforms; do
+  case $platform in
+    x86_64-linux) target=x86_64-unknown-linux-musl ;;
+    aarch64-linux) target=aarch64-unknown-linux-musl ;;
+    x86_64-darwin) target=x86_64-apple-darwin ;;
+    arm64-darwin) target=aarch64-apple-darwin ;;
+    *) echo "build-server: unknown platform $platform" >&2; exit 2 ;;
+  esac
+  echo "==> $platform ($target)"
+  docker run --rm -u "$(id -u):$(id -g)" \
+    -e HOME=/home/b -e CARGO_HOME=/cargo -e RUSTUP_HOME=/usr/local/rustup -e CARGO_TARGET_DIR=/target \
+    -e CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-4}" \
+    -e RUSTFLAGS="--remap-path-prefix=/src=. --remap-path-prefix=/cargo=cargo -C strip=symbols" \
+    -v "$cache/home:/home/b" -v "$cache/registry:/cargo/registry" -v "$cache/git:/cargo/git" -v "$cache/target:/target" \
+    -v "$src:/src:ro" -w /src "$IMAGE" \
+    sh -c "PATH=/usr/local/cargo/bin:\$PATH cargo zigbuild --release --locked -p railwatch-server --bin railwatch --target $target"
+  mkdir -p "$root/exe/$platform"
+  cp "$cache/target/$target/release/railwatch" "$root/exe/$platform/railwatch"
+  chmod 0755 "$root/exe/$platform/railwatch"
+  file "$root/exe/$platform/railwatch" || true
+done

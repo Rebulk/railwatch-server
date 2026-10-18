@@ -1,0 +1,4 @@
+# Built by script/build-server; ~20 MB each, attached to releases, not committed.
+/exe/*/railwatch
+/pkg/
+/Gemfile.lock

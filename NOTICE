@@ -1,0 +1,25 @@
+railwatch-server bundles the Railwatch server.
+
+The platform gems of railwatch-server (x86_64-linux, aarch64-linux,
+x86_64-darwin, arm64-darwin) contain exe/<platform>/railwatch, a compiled
+build of Railwatch (railwatch-rs), https://github.com/Rebulk/railwatch-rs,
+which is free software under the GNU Affero General Public License,
+version 3 only (AGPL-3.0-only). This gem's own Ruby code is under the same
+license; see LICENSE.
+
+The Corresponding Source of the bundled binary is the railwatch-rs commit
+named in lib/railwatch/server/version.rb (RAILWATCH_RS) with the patches in
+rust-patches/ of this gem's repository applied. The running server also
+links to its source on every response (the Link header and /source).
+Third-party code compiled into the binary keeps its own licenses, listed in
+railwatch-rs's THIRD-PARTY-LICENSES.
+
+Running this gem in your application does not make your application a
+derivative of Railwatch: the server is a separate program, started as its
+own process and spoken to over HTTP. If you modify the server and offer it
+to users over a network, AGPL-3.0 section 13 asks you to offer them the
+source of your version.
+
+The railwatch gem (https://github.com/Rebulk/railwatch), the agent that
+reports your app's telemetry, is a separate gem under the MIT license. This
+gem depends on it; it is not part of this gem.

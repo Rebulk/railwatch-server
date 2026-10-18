@@ -1,0 +1,863 @@
+From 8a7f5c9047e905aff2c1260a0174d67581801576 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 18 Oct 2026 16:46:39 -0500
+Subject: [PATCH] Base path and trusted proxy auth (railwatch-server prototype)
+
+RAILWATCH_BASE_PATH serves every page under a prefix (/railwatch) while
+/ingest and /up stay at the root; RAILWATCH_TRUSTED_PROXY_SECRET_FILE lets
+a proxy in front name the signed-in user with an HMAC-signed, short-lived
+X-Railwatch-Proxy-Auth header. Both off by default.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ crates/server/src/config.rs          |  68 ++++++++++
+ crates/server/src/main.rs            |   9 +-
+ crates/server/src/web/cable.rs       |   9 +-
+ crates/server/src/web/cookies.rs     |   5 +-
+ crates/server/src/web/document.rs    |  24 ++--
+ crates/server/src/web/env_pages.rs   |   7 +-
+ crates/server/src/web/inertia.rs     |  41 +++++-
+ crates/server/src/web/mod.rs         |  17 ++-
+ crates/server/src/web/proxy_auth.rs  | 181 +++++++++++++++++++++++++++
+ crates/server/src/web/session.rs     |  34 ++++-
+ crates/server/tests/trusted_proxy.rs | 173 +++++++++++++++++++++++++
+ frontend/vite.config.ts              |   5 +-
+ 12 files changed, 549 insertions(+), 24 deletions(-)
+ create mode 100644 crates/server/src/web/proxy_auth.rs
+ create mode 100644 crates/server/tests/trusted_proxy.rs
+
+diff --git a/crates/server/src/config.rs b/crates/server/src/config.rs
+index 348303b..14d5bc5 100644
+--- a/crates/server/src/config.rs
++++ b/crates/server/src/config.rs
+@@ -80,6 +80,16 @@ pub struct Config {
+     pub new_issues: crate::grouping::Limits,
+     /// HTTP timeouts and the connection cap (serve::Limits).
+     pub http: crate::serve::Limits,
++    /// The path prefix every page is served under (`/railwatch`), or empty
++    /// for the root. Ingest (`/ingest`, `/up`) always stays at the root, so
++    /// the gem's RAILWATCH_INGEST_URL does not change. For a reverse proxy
++    /// that mounts the dashboard inside another app (the railwatch-server
++    /// gem mounts it in the Rails app it monitors).
++    pub base_path: String,
++    /// `trusted_proxy_secret_file`: the proxy in front signs who is signed in
++    /// (web::proxy_auth); a request with a valid `X-Railwatch-Proxy-Auth`
++    /// header is that user, provisioned on first sight. None: off (default).
++    pub trusted_proxy_secret: Option<Vec<u8>>,
+     /// Where the values came from, for `railwatch doctor`.
+     pub sources: BTreeMap<&'static str, String>,
+     pub file: Option<PathBuf>,
+@@ -171,6 +181,23 @@ pub fn load_env_file() -> Result<(), String> {
+     Ok(())
+ }
+ 
++/// `""`, `"/"` -> `""`; `"railwatch/"` -> `"/railwatch"`. Only letters,
++/// digits, `-`, `_`, `.` and `/` between segments: it is written into HTML
++/// attributes, cookies and Location headers unescaped.
++pub fn normalize_base_path(raw: &str) -> Result<String, String> {
++    let trimmed = raw.trim().trim_matches('/');
++    if trimmed.is_empty() {
++        return Ok(String::new());
++    }
++    let ok = trimmed
++        .split('/')
++        .all(|seg| !seg.is_empty() && seg != "." && seg != ".." && seg.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.')));
++    if !ok {
++        return Err(format!("base_path: expected a path like /railwatch, got {raw:?}"));
++    }
++    Ok(format!("/{trimmed}"))
++}
++
+ fn truthy(s: &str) -> bool {
+     matches!(s.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on")
+ }
+@@ -338,6 +365,18 @@ impl Config {
+                 num(get("max_connections_per_ip", &["RAILWATCH_MAX_CONNECTIONS_PER_IP"]), "max_connections_per_ip", dh.max_connections_per_ip as u64)? as usize
+             },
+         };
++        let base_path = normalize_base_path(&get("base_path", &["RAILWATCH_BASE_PATH"]).unwrap_or_default())?;
++        let trusted_proxy_secret = match get("trusted_proxy_secret_file", &["RAILWATCH_TRUSTED_PROXY_SECRET_FILE"]).filter(|v| !v.trim().is_empty()) {
++            None => None,
++            Some(path) => {
++                let raw = std::fs::read(path.trim()).map_err(|e| format!("trusted_proxy_secret_file {path}: {e}"))?;
++                let secret = raw.trim_ascii().to_vec();
++                if secret.len() < 32 {
++                    return Err(format!("trusted_proxy_secret_file {path}: the secret must be at least 32 bytes"));
++                }
++                Some(secret)
++            }
++        };
+         // With automatic certificates the public URL is the domain's.
+         let url = match (&tls, url_given) {
+             (Some(crate::tls::Tls::Acme { domain, .. }), None) => format!("https://{domain}"),
+@@ -363,6 +402,8 @@ impl Config {
+             tls_redirect_bind,
+             new_issues,
+             http,
++            base_path,
++            trusted_proxy_secret,
+             sources,
+             file: l.file,
+         })
+@@ -382,6 +423,18 @@ impl Config {
+         format!("{}/auth/google_oauth2/callback", self.url)
+     }
+ 
++    /// The Path every cookie is set with: the base path, so cookies of the
++    /// app it is mounted in (its own `XSRF-TOKEN`, `session_token`) are not
++    /// overwritten.
++    pub fn cookie_path(&self) -> &str {
++        if self.base_path.is_empty() { "/" } else { &self.base_path }
++    }
++
++    /// A site path (`/dashboard`) as the browser sees it (`/railwatch/dashboard`).
++    pub fn page_path(&self, path: &str) -> String {
++        format!("{}{path}", self.base_path)
++    }
++
+     pub fn secure_cookies(&self) -> bool {
+         self.url.starts_with("https://")
+     }
+@@ -541,6 +594,21 @@ mod tests {
+         c
+     }
+ 
++    #[test]
++    fn base_path_is_one_clean_prefix_or_nothing() {
++        assert_eq!(normalize_base_path("").unwrap(), "");
++        assert_eq!(normalize_base_path("/").unwrap(), "");
++        assert_eq!(normalize_base_path("railwatch/").unwrap(), "/railwatch");
++        assert_eq!(normalize_base_path("/admin/railwatch").unwrap(), "/admin/railwatch");
++        for bad in ["/a//b", "/../x", "/a b", "/a\"b", "/x?y", "/%2e"] {
++            assert!(normalize_base_path(bad).is_err(), "{bad:?}");
++        }
++        let mut c = cfg("127.0.0.1:8790", "http://127.0.0.1:8790", false);
++        assert_eq!((c.cookie_path(), c.page_path("/dashboard").as_str()), ("/", "/dashboard"));
++        c.base_path = "/railwatch".into();
++        assert_eq!((c.cookie_path(), c.page_path("/dashboard").as_str()), ("/railwatch", "/railwatch/dashboard"));
++    }
++
+     #[test]
+     fn warns_when_proxied_without_trust_proxy() {
+         assert!(cfg("127.0.0.1:8790", "https://rw.example.com", false).proxy_warning().is_some());
+diff --git a/crates/server/src/main.rs b/crates/server/src/main.rs
+index 914f5b6..537ede0 100644
+--- a/crates/server/src/main.rs
++++ b/crates/server/src/main.rs
+@@ -1336,7 +1336,14 @@ fn serve() -> ExitCode {
+         });
+         // Pages first; anything they do not route (/ingest, /up) goes to the
+         // ingest API unchanged.
+-        let app = web::router(web_state).fallback_service(http::router(state.clone()));
++        let base_path = cfg.base_path.clone();
++        if !base_path.is_empty() {
++            tracing::info!(base_path, "pages served under the base path; /ingest and /up stay at the root");
++        }
++        if cfg.trusted_proxy_secret.is_some() {
++            tracing::warn!("trusted proxy auth on: a request signed with trusted_proxy_secret_file's secret is whoever it names");
++        }
++        let app = web::mounted(&base_path, web::router(web_state), http::router(state.clone()));
+         let app = railwatch_server::serve::source_link(railwatch_server::serve::hsts(app, cfg.hsts()));
+         let listener = railwatch_server::tls::Listener::new(listener, tls);
+         railwatch_server::serve::run(listener, app, cfg.http, shutdown_signal()).await;
+diff --git a/crates/server/src/web/cable.rs b/crates/server/src/web/cable.rs
+index aad65b2..18f2f3b 100644
+--- a/crates/server/src/web/cable.rs
++++ b/crates/server/src/web/cable.rs
+@@ -90,8 +90,13 @@ pub async fn upgrade(State(state): State<Arc<WebState>>, headers: HeaderMap, ws:
+     let session_id: Option<i64> =
+         cookies::get(&jar, cookies::SESSION_TOKEN).and_then(|c| state.keys.verify(cookies::SESSION_TOKEN, c)).and_then(|v| v.parse().ok());
+     let origin_ok = super::session::same_origin(&headers);
+-    let user = match (origin_ok, session_id) {
+-        (true, Some(sid)) => state.db(move |c| c.with(|x| crate::control::find_session(x, sid))).await.ok().flatten().map(|s| (s.id, s.user_id)),
++    let proxied = match super::session::proxy_claims(&state, &headers) {
++        Ok(c) => c,
++        Err(r) => return r,
++    };
++    let user = match (origin_ok, proxied, session_id) {
++        (true, Some(claims), _) => state.db(move |c| c.tx(|tx| super::proxy_auth::resolve(tx, &claims))).await.ok().map(|(s, u)| (s.id, u.id)),
++        (true, None, Some(sid)) => state.db(move |c| c.with(|x| crate::control::find_session(x, sid))).await.ok().flatten().map(|s| (s.id, s.user_id)),
+         _ => None,
+     };
+     ws.protocols(["actioncable-v1-json"]).on_upgrade(move |socket| run(socket, state, user))
+diff --git a/crates/server/src/web/cookies.rs b/crates/server/src/web/cookies.rs
+index 15cb099..fc1c397 100644
+--- a/crates/server/src/web/cookies.rs
++++ b/crates/server/src/web/cookies.rs
+@@ -119,8 +119,9 @@ pub struct SetCookie {
+ }
+ 
+ impl SetCookie {
+-    pub fn header(&self) -> HeaderValue {
+-        let mut s = format!("{}={}; Path=/; SameSite=Lax", self.name, self.value.as_deref().unwrap_or(""));
++    /// `path`: Config::cookie_path (the base path, or `/`).
++    pub fn header(&self, path: &str) -> HeaderValue {
++        let mut s = format!("{}={}; Path={path}; SameSite=Lax", self.name, self.value.as_deref().unwrap_or(""));
+         match (&self.value, self.permanent) {
+             (None, _) => s.push_str("; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT"),
+             (Some(_), true) => s.push_str(&format!("; Max-Age={PERMANENT_SECONDS}")),
+diff --git a/crates/server/src/web/document.rs b/crates/server/src/web/document.rs
+index d22f9ac..bdea1f0 100644
+--- a/crates/server/src/web/document.rs
++++ b/crates/server/src/web/document.rs
+@@ -7,6 +7,10 @@ use super::assets;
+ 
+ /// View data key for the request's CSRF token (`csrf_meta_tags`).
+ pub const CSRF: &str = "csrf_token";
++/// View data key for Config::base_path: prefixes every URL in the document,
++/// and is published as `railwatch-mount` (the route helpers' script_name,
++/// as the gem's embedded engine does) and `action-cable-url`.
++pub const BASE_PATH: &str = "base_path";
+ 
+ pub fn escape_attr(s: &str) -> String {
+     s.replace('&', "&amp;").replace('"', "&quot;").replace('<', "&lt;").replace('>', "&gt;")
+@@ -23,17 +27,23 @@ const DARK_MODE_SCRIPT: &str = r#"
+ pub fn render(view: &omega::View<'_>) -> String {
+     let m = assets::manifest();
+     let csrf = view.data.get(CSRF).and_then(|v| v.as_str()).unwrap_or("");
++    // config::normalize_base_path allows nothing that needs escaping.
++    let base = view.data.get(BASE_PATH).and_then(|v| v.as_str()).unwrap_or("");
+     let mut tags = String::new();
++    if !base.is_empty() {
++        tags.push_str(&format!("<meta name=\"railwatch-mount\" content=\"{base}\">\n    "));
++    }
++    tags.push_str(&format!("<meta name=\"action-cable-url\" content=\"{base}/cable\">\n    "));
+     for f in &m.fonts {
+-        tags.push_str(&format!("<link rel=\"preload\" href=\"{f}\" as=\"font\" type=\"font/woff2\" crossorigin>\n    "));
++        tags.push_str(&format!("<link rel=\"preload\" href=\"{base}{f}\" as=\"font\" type=\"font/woff2\" crossorigin>\n    "));
+     }
+     for c in &m.css {
+-        tags.push_str(&format!("<link rel=\"stylesheet\" href=\"{c}\">\n    "));
++        tags.push_str(&format!("<link rel=\"stylesheet\" href=\"{base}{c}\">\n    "));
+     }
+     for p in &m.preload {
+-        tags.push_str(&format!("<link rel=\"modulepreload\" href=\"{p}\">\n    "));
++        tags.push_str(&format!("<link rel=\"modulepreload\" href=\"{base}{p}\">\n    "));
+     }
+-    tags.push_str(&format!("<script type=\"module\" src=\"{}\"></script>", m.script));
++    tags.push_str(&format!("<script type=\"module\" src=\"{base}{}\"></script>", m.script));
+     format!(
+         r#"<!DOCTYPE html>
+ <html>
+@@ -45,9 +55,9 @@ pub fn render(view: &omega::View<'_>) -> String {
+     <link rel="license" href="{source}/blob/main/LICENSE" title="AGPL-3.0-only: source at {source}">
+     <meta name="csrf-param" content="authenticity_token">
+     <meta name="csrf-token" content="{csrf}">
+-    <link rel="icon" href="/icon.png" type="image/png">
+-    <link rel="icon" href="/icon.svg" type="image/svg+xml">
+-    <link rel="apple-touch-icon" href="/icon.png">
++    <link rel="icon" href="{base}/icon.png" type="image/png">
++    <link rel="icon" href="{base}/icon.svg" type="image/svg+xml">
++    <link rel="apple-touch-icon" href="{base}/icon.png">
+     <script>{DARK_MODE_SCRIPT}</script>
+     {tags}
+     {head}
+diff --git a/crates/server/src/web/env_pages.rs b/crates/server/src/web/env_pages.rs
+index 5eb501f..b2a9a85 100644
+--- a/crates/server/src/web/env_pages.rs
++++ b/crates/server/src/web/env_pages.rs
+@@ -168,7 +168,7 @@ pub fn window_props(p: &Params, now: i64) -> Value {
+ }
+ 
+ /// SavedView.props_for(environment, user).
+-fn saved_views(x: &rusqlite::Connection, env: i64, app: i64, user: i64) -> rusqlite::Result<Vec<Value>> {
++fn saved_views(x: &rusqlite::Connection, env: i64, app: i64, user: i64, base_path: &str) -> rusqlite::Result<Vec<Value>> {
+     x.prepare(
+         "SELECT id, name, page, query, \"window\", params, pinned, shared, user_id FROM saved_views
+          WHERE environment_id = ?1 AND (shared = 1 OR user_id = ?2) ORDER BY name",
+@@ -180,7 +180,7 @@ fn saved_views(x: &rusqlite::Connection, env: i64, app: i64, user: i64) -> rusql
+         let extra: Value = serde_json::from_str(&r.get::<_, String>(5)?).unwrap_or(json!({}));
+         Ok(json!({"id": r.get::<_, i64>(0)?, "name": r.get::<_, String>(1)?, "page": page, "query": query, "window": window,
+                   "params": extra, "pinned": r.get::<_, bool>(6)?, "shared": r.get::<_, bool>(7)?, "mine": r.get::<_, i64>(8)? == user,
+-                  "url": saved_view_path(app, env, &page, window.as_deref(), query.as_deref(), &extra)}))
++                  "url": format!("{base_path}{}", saved_view_path(app, env, &page, window.as_deref(), query.as_deref(), &extra))}))
+     })?
+     .collect()
+ }
+@@ -333,7 +333,8 @@ async fn page(cx: Ctx, component: &'static str, segments: Vec<(String, String)>,
+     };
+     let params = Params::from_query(q.as_deref());
+     let user = cx.user_id();
+-    let views = match cx.state.db(move |c| c.with(|x| saved_views(x, env, app, user))).await {
++    let base = cx.state.config.base_path.clone();
++    let views = match cx.state.db(move |c| c.with(|x| saved_views(x, env, app, user, &base))).await {
+         Ok(v) => v,
+         Err(e) => {
+             tracing::error!(error = %e, "saved views failed");
+diff --git a/crates/server/src/web/inertia.rs b/crates/server/src/web/inertia.rs
+index d55099e..3fd46e0 100644
+--- a/crates/server/src/web/inertia.rs
++++ b/crates/server/src/web/inertia.rs
+@@ -145,6 +145,20 @@ fn local_path(referer: &str) -> Option<&str> {
+     ok.then_some(path)
+ }
+ 
++/// `path` without the `base` prefix (`/railwatch/issues` -> `/issues`);
++/// None when it is not under it.
++fn unprefixed<'a>(path: &'a str, base: &str) -> Option<&'a str> {
++    if base.is_empty() {
++        return Some(path);
++    }
++    let rest = path.strip_prefix(base)?;
++    match rest.as_bytes().first() {
++        None => Some("/"),
++        Some(b'/') => Some(rest),
++        _ => None,
++    }
++}
++
+ impl Ctx {
+     pub fn user_id(&self) -> i64 {
+         self.current.user.as_ref().map(|u| u.id).expect("authenticated route")
+@@ -154,9 +168,11 @@ impl Ctx {
+         self.current.account.as_ref().map(|a| a.id).expect("account route")
+     }
+ 
+-    /// `redirect_back_or_to`
++    /// `redirect_back_or_to`. A site path, like `fallback`: the Referer's
++    /// path with the base path taken off (one outside it is not ours).
+     pub fn back_or(&self, fallback: &str) -> String {
+-        self.referer.as_deref().and_then(local_path).map_or_else(|| fallback.to_string(), str::to_string)
++        let base = self.state.config.base_path.as_str();
++        self.referer.as_deref().and_then(local_path).and_then(|p| unprefixed(p, base)).map_or_else(|| fallback.to_string(), str::to_string)
+     }
+ 
+     pub fn redirect(&self, r: Redirect) -> Response {
+@@ -184,7 +200,11 @@ impl Ctx {
+         if r.clear_history {
+             self.inertia.clear_history();
+         }
+-        let mut res = (StatusCode::FOUND, [(header::LOCATION, r.to)]).into_response();
++        // Handlers redirect to site paths (`/dashboard`); the browser needs
++        // them under the base path. Absolute URLs (Google, /source's repo)
++        // go as they are.
++        let to = if r.to.starts_with('/') { self.state.config.page_path(&r.to) } else { r.to };
++        let mut res = (StatusCode::FOUND, [(header::LOCATION, to)]).into_response();
+         res.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("text/html; charset=utf-8"));
+         res
+     }
+@@ -220,7 +240,11 @@ impl Ctx {
+             }
+         }
+         let csrf = csrf_token(&self.session);
+-        self.inertia.render(component, page).with_view_data(document::CSRF, csrf).into_response()
++        self.inertia
++            .render(component, page)
++            .with_view_data(document::CSRF, csrf)
++            .with_view_data(document::BASE_PATH, self.state.config.base_path.clone())
++            .into_response()
+     }
+ 
+     async fn shared_props(&self) -> rusqlite::Result<Vec<(String, omega::Prop)>> {
+@@ -349,6 +373,15 @@ mod tests {
+         }
+     }
+ 
++    #[test]
++    fn back_paths_lose_the_base_path_or_are_refused() {
++        assert_eq!(unprefixed("/railwatch/issues?s=1", "/railwatch"), Some("/issues?s=1"));
++        assert_eq!(unprefixed("/railwatch", "/railwatch"), Some("/"));
++        assert_eq!(unprefixed("/railwatchx/issues", "/railwatch"), None, "a sibling path is not under the base");
++        assert_eq!(unprefixed("/admin", "/railwatch"), None, "the host app's own pages are not ours to redirect to");
++        assert_eq!(unprefixed("/issues", ""), Some("/issues"));
++    }
++
+     #[test]
+     fn times_render_as_rails_as_json() {
+         assert_eq!(t_json("2026-10-13 18:11:17.778703"), "2026-10-13T18:11:17.778Z");
+diff --git a/crates/server/src/web/mod.rs b/crates/server/src/web/mod.rs
+index b51ecb4..b47ed16 100644
+--- a/crates/server/src/web/mod.rs
++++ b/crates/server/src/web/mod.rs
+@@ -25,6 +25,7 @@ pub mod issues;
+ pub mod mailer;
+ pub mod mcp;
+ pub mod params;
++pub mod proxy_auth;
+ pub mod session;
+ pub mod sessions_oauth;
+ 
+@@ -131,6 +132,7 @@ impl WebState {
+ /// Everything browser-facing. The ingest router (http.rs) handles /ingest,
+ /// /up and is the fallback for anything this one does not route.
+ pub fn router(state: Arc<WebState>) -> Router {
++    let mounted = !state.config.base_path.is_empty();
+     let pages = controllers::routes()
+         .merge(env_pages::routes())
+         .merge(issues::routes())
+@@ -139,7 +141,7 @@ pub fn router(state: Arc<WebState>) -> Router {
+         .merge(sessions_oauth::routes());
+     let pages = inertia::layer(pages);
+     let pages = session::layer(pages, state.clone());
+-    Router::new()
++    let router = Router::new()
+         .merge(pages)
+         // McpController: bearer-token auth, outside the session layer.
+         .merge(mcp::routes())
+@@ -155,8 +157,17 @@ pub fn router(state: Arc<WebState>) -> Router {
+         // visits here. Rails cloud records them through the mounted gem engine;
+         // this server does not monitor itself, so it answers like the gem's
+         // BeaconController with beacon_enabled off: 204, nothing stored.
+-        .route("/railwatch/beacon", axum::routing::post(|| async { axum::http::StatusCode::NO_CONTENT }))
+-        .with_state(state)
++        .route("/railwatch/beacon", axum::routing::post(|| async { axum::http::StatusCode::NO_CONTENT }));
++    // Mounted at /railwatch, the bundle's hard-coded /railwatch/beacon
++    // arrives here as /beacon.
++    let router = if mounted { router.route("/beacon", axum::routing::post(|| async { axum::http::StatusCode::NO_CONTENT })) } else { router };
++    router.with_state(state)
++}
++
++/// `router` under `base_path` (when set), with `fallback` (the ingest API)
++/// for everything else, so `/ingest` and `/up` stay at the root.
++pub fn mounted(base_path: &str, pages: Router, fallback: Router) -> Router {
++    if base_path.is_empty() { pages.fallback_service(fallback) } else { Router::new().nest(base_path, pages).fallback_service(fallback) }
+ }
+ 
+ /// The telemetry cursor signing key (CursorPage's message_verifier).
+diff --git a/crates/server/src/web/proxy_auth.rs b/crates/server/src/web/proxy_auth.rs
+new file mode 100644
+index 0000000..e2bdd84
+--- /dev/null
++++ b/crates/server/src/web/proxy_auth.rs
+@@ -0,0 +1,181 @@
++//! Trusted proxy authentication (`trusted_proxy_secret_file`, off by
++//! default): a reverse proxy that has already authenticated the browser (the
++//! railwatch-server gem's mount inside a Rails app, behind that app's own
++//! login) says who it is with one signed header per request:
++//!
++//!   X-Railwatch-Proxy-Auth: v1.<base64url(JSON claims)>.<base64url(HMAC-SHA256(secret, "v1." + claims))>
++//!
++//! with claims `{"email", "name", "role": "admin"|"member", "exp": <unix s>}`.
++//! A valid header makes the request that user's, whatever cookies it
++//! carries: the user is created on first sight (verified, with a random
++//! password nobody knows), joins the first account with that role, and gets
++//! one long-lived session row (Current.session) reused on every request.
++//! `exp` must lie in the future and at most MAX_TTL ahead, so a header
++//! that leaks (a log line) is good for a minute, not forever.
++//!
++//! An invalid header is refused (401), never ignored: a proxy that signs
++//! with the wrong secret should fail loudly, not fall back to the sign-in
++//! page. A request without the header is a normal request (cookie sign-in
++//! still works for someone who reaches the server directly). The proxy must
++//! drop any copy of the header the browser sent.
++
++use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
++use hmac::{Hmac, Mac};
++use rusqlite::{Connection, OptionalExtension, params};
++use serde::Deserialize;
++
++use crate::control::{self, Session, User};
++
++pub const HEADER: &str = "x-railwatch-proxy-auth";
++/// The longest a signed header may be valid for.
++pub const MAX_TTL_SECS: i64 = 300;
++/// The user agent of the session row a proxied user is given.
++const SESSION_AGENT: &str = "railwatch trusted proxy";
++
++#[derive(Debug, Clone, PartialEq, Deserialize)]
++pub struct Claims {
++    pub email: String,
++    pub name: String,
++    pub role: String,
++    pub exp: i64,
++}
++
++fn mac(secret: &[u8], signed: &[u8]) -> Hmac<sha2::Sha256> {
++    let mut m = <Hmac<sha2::Sha256> as Mac>::new_from_slice(secret).expect("hmac key");
++    m.update(signed);
++    m
++}
++
++/// The header value for `claims` (what the proxy sends; tests and docs).
++pub fn sign(secret: &[u8], claims: &serde_json::Value) -> String {
++    let payload = URL_SAFE_NO_PAD.encode(claims.to_string());
++    let signed = format!("v1.{payload}");
++    let sig = URL_SAFE_NO_PAD.encode(mac(secret, signed.as_bytes()).finalize().into_bytes());
++    format!("{signed}.{sig}")
++}
++
++/// The claims of a header value signed with `secret`, valid at `now` (unix s).
++pub fn verify(secret: &[u8], value: &str, now: i64) -> Result<Claims, &'static str> {
++    let (signed, sig) = value.rsplit_once('.').ok_or("malformed")?;
++    let payload = signed.strip_prefix("v1.").ok_or("unknown version")?;
++    let sig = URL_SAFE_NO_PAD.decode(sig).map_err(|_| "malformed signature")?;
++    mac(secret, signed.as_bytes()).verify_slice(&sig).map_err(|_| "bad signature")?;
++    let json = URL_SAFE_NO_PAD.decode(payload).map_err(|_| "malformed claims")?;
++    let c: Claims = serde_json::from_slice(&json).map_err(|_| "malformed claims")?;
++    if c.exp <= now {
++        return Err("expired");
++    }
++    if c.exp > now + MAX_TTL_SECS {
++        return Err("exp too far ahead");
++    }
++    if !control::valid_email(&control::normalize_email(&c.email)) {
++        return Err("invalid email");
++    }
++    if !["admin", "member"].contains(&c.role.as_str()) {
++        return Err("role must be admin or member");
++    }
++    Ok(c)
++}
++
++/// The session and user for verified claims, creating what is missing.
++/// Reads first and writes only on a change, so the common request is three
++/// SELECTs.
++pub fn resolve(c: &Connection, claims: &Claims) -> control::ModelResult<(Session, User)> {
++    let account: i64 = c
++        .query_row("SELECT id FROM accounts ORDER BY id LIMIT 1", [], |r| r.get(0))
++        .optional()?
++        .ok_or_else(|| control::ModelError::Invalid(vec![("base".into(), "no account yet: run `railwatch setup`".into())]))?;
++    let user = match control::find_user_by_email(c, &claims.email)? {
++        Some(u) => u,
++        None => {
++            let mut b = [0u8; 32];
++            getrandom::fill(&mut b).expect("random");
++            let name = if claims.name.trim().is_empty() { claims.email.clone() } else { claims.name.clone() };
++            let id = control::insert_user(c, &name, &claims.email, &URL_SAFE_NO_PAD.encode(b), true)?;
++            tracing::info!(user = id, email = %control::normalize_email(&claims.email), "trusted proxy: created user");
++            control::find_user(c, id)?.expect("just created")
++        }
++    };
++    let role: Option<String> =
++        c.query_row("SELECT role FROM memberships WHERE account_id = ? AND user_id = ?", params![account, user.id], |r| r.get(0)).optional()?;
++    match role.as_deref() {
++        None => {
++            control::insert_membership(c, account, user.id, &claims.role)?;
++        }
++        // The owner stays the owner; ownership moves only by transfer.
++        Some("owner") => {}
++        Some(r) if r != claims.role => {
++            c.execute(
++                "UPDATE memberships SET role = ?, updated_at = ? WHERE account_id = ? AND user_id = ?",
++                params![claims.role, control::now_db(), account, user.id],
++            )?;
++        }
++        Some(_) => {}
++    }
++    let session: Option<i64> = c
++        .query_row("SELECT id FROM sessions WHERE user_id = ? AND user_agent = ? ORDER BY id LIMIT 1", params![user.id, SESSION_AGENT], |r| r.get(0))
++        .optional()?;
++    let session = match session {
++        Some(id) => id,
++        None => control::create_session(c, user.id, Some(SESSION_AGENT), None)?,
++    };
++    Ok((control::find_session(c, session)?.expect("session row"), user))
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use serde_json::json;
++
++    const SECRET: &[u8] = b"0123456789abcdef0123456789abcdef";
++
++    fn claims(exp: i64) -> serde_json::Value {
++        json!({"email": "Ada@Example.com", "name": "Ada", "role": "admin", "exp": exp})
++    }
++
++    #[test]
++    fn a_signed_header_names_the_user_for_a_minute_only() {
++        let h = sign(SECRET, &claims(1_060));
++        let c = verify(SECRET, &h, 1_000).unwrap();
++        assert_eq!((c.email.as_str(), c.role.as_str()), ("Ada@Example.com", "admin"));
++        assert_eq!(verify(SECRET, &h, 1_060), Err("expired"));
++        assert_eq!(verify(SECRET, &sign(SECRET, &claims(1_000 + MAX_TTL_SECS + 1)), 1_000), Err("exp too far ahead"));
++    }
++
++    #[test]
++    fn forged_or_altered_headers_are_refused() {
++        let h = sign(SECRET, &claims(1_060));
++        assert_eq!(verify(b"another secret another secret 00", &h, 1_000), Err("bad signature"));
++        // Claims swapped for another user's under the same signature.
++        let (_, sig) = h.rsplit_once('.').unwrap();
++        let other = URL_SAFE_NO_PAD.encode(json!({"email": "eve@example.com", "name": "Eve", "role": "admin", "exp": 1_060}).to_string());
++        assert_eq!(verify(SECRET, &format!("v1.{other}.{sig}"), 1_000), Err("bad signature"));
++        assert_eq!(verify(SECRET, &h.replacen("v1.", "v2.", 1), 1_000), Err("unknown version"));
++        assert_eq!(verify(SECRET, "garbage", 1_000), Err("malformed"));
++        let owner = sign(SECRET, &json!({"email": "a@example.com", "name": "A", "role": "owner", "exp": 1_060}));
++        assert_eq!(verify(SECRET, &owner, 1_000), Err("role must be admin or member"), "a proxy cannot mint owners");
++    }
++
++    #[test]
++    fn first_sight_provisions_once_and_role_follows_the_proxy() {
++        let dir = std::env::temp_dir().join(format!("rw-proxy-auth-{}", std::process::id()));
++        std::fs::create_dir_all(&dir).unwrap();
++        let control = control::Control::open(&dir.join("control.sqlite3")).unwrap();
++        let owner = control.tx(|tx| control::insert_user(tx, "Owner", "owner@example.com", &control::test_password(), true)).unwrap();
++        let account = control.tx(|tx| control::create_account(tx, "Acme", owner)).unwrap();
++        let c = |role: &str| Claims { email: "Ada@Example.com".into(), name: "Ada".into(), role: role.into(), exp: 0 };
++
++        let (s1, u1) = control.tx(|tx| resolve(tx, &c("member"))).unwrap();
++        assert_eq!((u1.email.as_str(), u1.verified, s1.user_id), ("ada@example.com", true, u1.id));
++        let (s2, u2) = control.tx(|tx| resolve(tx, &c("admin"))).unwrap();
++        assert_eq!((s2.id, u2.id), (s1.id, u1.id), "the same user and session row every time");
++        let role = |user: i64| -> String {
++            control.with(|x| x.query_row("SELECT role FROM memberships WHERE account_id = ? AND user_id = ?", params![account, user], |r| r.get(0))).unwrap()
++        };
++        assert_eq!(role(u1.id), "admin");
++        let owner_claims = Claims { email: "owner@example.com".into(), name: "Owner".into(), role: "member".into(), exp: 0 };
++        control.tx(|tx| resolve(tx, &owner_claims)).unwrap();
++        assert_eq!(role(owner), "owner", "the proxy never demotes the owner");
++        std::fs::remove_dir_all(&dir).unwrap();
++    }
++}
+diff --git a/crates/server/src/web/session.rs b/crates/server/src/web/session.rs
+index 15fc98c..8cfe872 100644
+--- a/crates/server/src/web/session.rs
++++ b/crates/server/src/web/session.rs
+@@ -174,6 +174,22 @@ pub fn same_origin(headers: &HeaderMap) -> bool {
+     origin.split_once("://").is_some_and(|(_, authority)| authority.eq_ignore_ascii_case(host))
+ }
+ 
++/// The trusted proxy's claims for this request: None without the header or
++/// with proxy auth off; a 401 for a header that does not verify (a proxy
++/// signing with the wrong secret must fail loudly, not look signed out).
++pub fn proxy_claims(state: &WebState, headers: &HeaderMap) -> Result<Option<super::proxy_auth::Claims>, Response> {
++    let Some(secret) = state.config.trusted_proxy_secret.as_deref() else { return Ok(None) };
++    let Some(value) = headers.get(super::proxy_auth::HEADER) else { return Ok(None) };
++    let now = crate::time::now_micros().div_euclid(1_000_000);
++    match value.to_str().map_err(|_| "not ASCII").and_then(|v| super::proxy_auth::verify(secret, v, now)) {
++        Ok(c) => Ok(Some(c)),
++        Err(why) => {
++            tracing::warn!(why, "trusted proxy header refused");
++            Err((StatusCode::UNAUTHORIZED, "Unauthorized: X-Railwatch-Proxy-Auth did not verify").into_response())
++        }
++    }
++}
++
+ fn csrf_ok(headers: &HeaderMap, expected: &str) -> bool {
+     let given = headers.get("x-xsrf-token").or_else(|| headers.get("x-csrf-token")).and_then(|v| v.to_str().ok());
+     // axios sends the cookie value URL-decoded; ours is base64url, which
+@@ -190,9 +206,25 @@ async fn middleware(State(state): State<Arc<WebState>>, mut req: Request, next:
+         cookies::get(&jar, cookies::ACCOUNT_ID).and_then(|c| state.keys.verify(cookies::ACCOUNT_ID, c)).and_then(|v| v.parse().ok());
+     let ip = state.client_ip(&req).to_string();
+     let user_agent = req.headers().get(header::USER_AGENT).and_then(|v| v.to_str().ok()).map(str::to_string);
++    let proxied = match proxy_claims(&state, req.headers()) {
++        Ok(c) => c,
++        Err(r) => return r,
++    };
+ 
+     let resolved = state
+         .db(move |c| {
++            if let Some(claims) = proxied {
++                return c
++                    .tx(|tx| {
++                        let (s, u) = super::proxy_auth::resolve(tx, &claims)?;
++                        let account = find_account(tx, u.id, account_pref)?;
++                        Ok((Some(s), Some(u), account))
++                    })
++                    .map_err(|e| match e {
++                        control::ModelError::Sql(e) => e,
++                        control::ModelError::Invalid(m) => rusqlite::Error::InvalidParameterName(format!("{m:?}")),
++                    });
++            }
+             c.with(|conn| {
+                 let Some(s) = session_id.map(|id| control::find_session(conn, id)).transpose()?.flatten() else {
+                     return Ok((None, None, None));
+@@ -281,7 +313,7 @@ async fn middleware(State(state): State<Arc<WebState>>, mut req: Request, next:
+     }
+     let h = res.headers_mut();
+     for c in set {
+-        h.append(header::SET_COOKIE, c.header());
++        h.append(header::SET_COOKIE, c.header(state.config.cookie_path()));
+     }
+     h.insert("x-frame-options", HeaderValue::from_static("SAMEORIGIN"));
+     h.insert("x-content-type-options", HeaderValue::from_static("nosniff"));
+diff --git a/crates/server/tests/trusted_proxy.rs b/crates/server/tests/trusted_proxy.rs
+new file mode 100644
+index 0000000..2b81c5d
+--- /dev/null
++++ b/crates/server/tests/trusted_proxy.rs
+@@ -0,0 +1,173 @@
++//! `base_path` + `trusted_proxy_secret_file` over real HTTP: the web router
++//! mounted at /railwatch with the ingest API at the root, as `serve` builds
++//! it, and requests a proxy in front would send.
++//!
++//! One test, sequential, because Config::load reads process-global env.
++
++use std::net::SocketAddr;
++use std::sync::Arc;
++use std::time::Duration;
++
++use railwatch_server::config::Config;
++use railwatch_server::control::{self, Control};
++use railwatch_server::followups;
++use railwatch_server::http::{self, AppState};
++use railwatch_server::rate_limit::FixedWindow;
++use railwatch_server::tenants::Tenants;
++use railwatch_server::web::{self, WebState, proxy_auth};
++use serde_json::json;
++
++const SECRET_KEY_BASE: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
++const PROXY_SECRET: &[u8] = b"proxy-secret-proxy-secret-proxy-secret-0123";
++
++fn now() -> i64 {
++    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64
++}
++
++fn signed(email: &str, role: &str) -> String {
++    proxy_auth::sign(PROXY_SECRET, &json!({"email": email, "name": "Ada", "role": role, "exp": now() + 60}))
++}
++
++#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
++async fn mounted_under_a_base_path_behind_a_trusted_proxy() {
++    let _ = tracing_subscriber::fmt().with_test_writer().try_init();
++    let dir = std::env::temp_dir().join(format!("rw-trusted-proxy-{}", std::process::id()));
++    std::fs::create_dir_all(&dir).unwrap();
++    let secret_file = dir.join("proxy_secret");
++    std::fs::write(&secret_file, PROXY_SECRET).unwrap();
++    unsafe {
++        std::env::set_var("RAILWATCH_DATA_DIR", dir.to_str().unwrap());
++        std::env::set_var("RAILWATCH_SECRET_KEY_BASE", SECRET_KEY_BASE);
++        std::env::set_var("RAILWATCH_URL", "http://127.0.0.1");
++        std::env::set_var("RAILWATCH_BASE_PATH", "/railwatch/");
++        std::env::set_var("RAILWATCH_TRUSTED_PROXY_SECRET_FILE", secret_file.to_str().unwrap());
++        std::env::remove_var("RAILWATCH_CONFIG");
++    }
++    let cfg = Config::load().expect("config");
++    assert_eq!(cfg.base_path, "/railwatch");
++    let control = Arc::new(Control::open(&cfg.control_path()).expect("control"));
++    let (app_id, env_id, token) = {
++        let owner = control.tx(|tx| control::insert_user(tx, "Owner", "owner@example.com", &control::base58(16), true)).unwrap();
++        let account = control.tx(|tx| control::create_account(tx, "Acme", owner)).unwrap();
++        let app = control.tx(|tx| control::insert_application(tx, account, "Shop", "shop", "SHOP", None, "main")).unwrap();
++        let (env, token) = control.tx(|tx| control::create_environment(tx, app, "production")).unwrap();
++        (app, env, token)
++    };
++
++    let (tx, _rx) = followups::channel();
++    let tenants = Tenants::new(cfg.tenants_dir(), Duration::from_secs(300), tx);
++    // What `setup` does after creating the environment.
++    let slug: String = control.with(|c| c.query_row("SELECT slug FROM environments WHERE id = ?", [env_id], |r| r.get(0))).unwrap();
++    tenants.ensure(&slug).unwrap();
++    let state = Arc::new(AppState {
++        control: control.clone(),
++        tenants: tenants.clone(),
++        ip_limit: FixedWindow::new(0),
++        env_limit: FixedWindow::new(0),
++        trust_proxy: false,
++        sourcemaps_dir: dir.join("sourcemaps"),
++        cpu: Arc::new(tokio::sync::Semaphore::new(2)),
++    });
++    let web_state = Arc::new(WebState::new(control.clone(), cfg.clone(), tenants, web::cable::Hub::new()).expect("web state"));
++    let app = web::mounted(&cfg.base_path, web::router(web_state), http::router(state)).into_make_service_with_connect_info::<SocketAddr>();
++    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
++    let addr = listener.local_addr().unwrap();
++    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
++    let base = format!("http://{addr}");
++    let http = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).build().unwrap();
++    let get = |path: &str, auth: Option<String>| {
++        let mut r = http.get(format!("{base}{path}"));
++        if let Some(a) = auth {
++            r = r.header(proxy_auth::HEADER, a);
++        }
++        r.send()
++    };
++
++    // Ingest stays at the root: the gem's RAILWATCH_INGEST_URL is unchanged.
++    let up = get("/up", None).await.unwrap();
++    assert_eq!(up.status(), 200, "/up at the root");
++    let ping = http.get(format!("{base}/ingest/ping")).bearer_auth(&token).send().await.unwrap();
++    assert!(ping.status().is_success(), "/ingest/ping at the root with the env token: {}", ping.status());
++
++    // Unsigned: the normal sign-in flow, under the base path.
++    let r = get("/railwatch/dashboard", None).await.unwrap();
++    assert_eq!(r.status(), 302);
++    assert_eq!(r.headers()["location"], "/railwatch/sign_in", "redirects carry the base path");
++    let sign_in = get("/railwatch/sign_in", None).await.unwrap();
++    let cookie_paths: Vec<String> = sign_in.headers().get_all("set-cookie").iter().map(|v| v.to_str().unwrap().to_string()).collect();
++    assert!(!cookie_paths.is_empty() && cookie_paths.iter().all(|c| c.contains("Path=/railwatch;")), "cookies scoped to the mount: {cookie_paths:?}");
++    let html = sign_in.text().await.unwrap();
++    assert!(html.contains(r#"<meta name="railwatch-mount" content="/railwatch">"#), "route helpers get the mount");
++    assert!(html.contains(r#"<meta name="action-cable-url" content="/railwatch/cable">"#), "cable under the mount");
++    assert!(html.contains(r#"src="/railwatch/vite/assets/"#), "the entry script under the mount");
++    assert!(html.contains(r#"href="/railwatch/icon.png""#));
++    let script = html.split(r#"src="/railwatch/vite/"#).nth(1).unwrap().split('"').next().unwrap();
++    let js = get(&format!("/railwatch/vite/{script}"), None).await.unwrap();
++    assert_eq!(js.status(), 200, "assets served under the mount");
++    assert_eq!(get("/dashboard", None).await.unwrap().status(), 404, "pages are not also at the root");
++
++    // Signed by the proxy: that user, created on first sight, no sign-in.
++    let page = format!("/railwatch/apps/{app_id}/envs/{env_id}");
++    let r = get(&page, Some(signed("ada@example.com", "admin"))).await.unwrap();
++    assert_eq!(r.status(), 200, "a proxied admin sees the environment");
++    let html = r.text().await.unwrap();
++    assert!(html.contains("ada@example.com"), "the page is rendered for the proxied user");
++    let (role, sessions): (String, i64) = control
++        .with(|c| {
++            c.query_row(
++                "SELECT m.role, (SELECT count(*) FROM sessions s WHERE s.user_id = u.id) FROM users u JOIN memberships m ON m.user_id = u.id WHERE u.email = 'ada@example.com'",
++                [],
++                |r| Ok((r.get(0)?, r.get(1)?)),
++            )
++        })
++        .unwrap();
++    assert_eq!((role.as_str(), sessions), ("admin", 1));
++    get(&page, Some(signed("ada@example.com", "admin"))).await.unwrap();
++    let sessions: i64 = control.with(|c| c.query_row("SELECT count(*) FROM sessions WHERE user_agent = 'railwatch trusted proxy'", [], |r| r.get(0))).unwrap();
++    assert_eq!(sessions, 1, "one session row reused, not one per request");
++
++    // A mutating request still needs the session's CSRF token: the proxy
++    // forwards the browser's XSRF cookie and header, it does not bypass CSRF.
++    let r = http
++        .post(format!("{base}/railwatch/apps/{app_id}/envs/{env_id}/saved_views"))
++        .header(proxy_auth::HEADER, signed("ada@example.com", "admin"))
++        .send()
++        .await
++        .unwrap();
++    assert_eq!(r.status(), 422, "no CSRF token: refused even with a valid proxy header");
++
++    // Forged, expired, or too long-lived headers: 401, never a fallback.
++    let forged =
++        proxy_auth::sign(b"not-the-secret-not-the-secret-not-the-se", &json!({"email": "eve@example.com", "name": "Eve", "role": "admin", "exp": now() + 60}));
++    assert_eq!(get(&page, Some(forged)).await.unwrap().status(), 401);
++    let expired = proxy_auth::sign(PROXY_SECRET, &json!({"email": "ada@example.com", "name": "Ada", "role": "admin", "exp": now() - 1}));
++    assert_eq!(get(&page, Some(expired)).await.unwrap().status(), 401);
++    let forever = proxy_auth::sign(PROXY_SECRET, &json!({"email": "ada@example.com", "name": "Ada", "role": "admin", "exp": now() + 86_400}));
++    assert_eq!(get(&page, Some(forever)).await.unwrap().status(), 401);
++    let eve: i64 = control.with(|c| c.query_row("SELECT count(*) FROM users WHERE email = 'eve@example.com'", [], |r| r.get(0))).unwrap();
++    assert_eq!(eve, 0, "a forged header provisions nobody");
++
++    // The live channel: the same header authorizes the websocket handshake.
++    let ws = http
++        .get(format!("{base}/railwatch/cable"))
++        .header(proxy_auth::HEADER, signed("ada@example.com", "member"))
++        .header("connection", "upgrade")
++        .header("upgrade", "websocket")
++        .header("sec-websocket-version", "13")
++        .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
++        .header("sec-websocket-protocol", "actioncable-v1-json")
++        .send()
++        .await
++        .unwrap();
++    assert_eq!(ws.status(), 101, "cable upgrades under the mount");
++    let role: String = control
++        .with(|c| c.query_row("SELECT m.role FROM memberships m JOIN users u ON u.id = m.user_id WHERE u.email = 'ada@example.com'", [], |r| r.get(0)))
++        .unwrap();
++    assert_eq!(role, "member", "the proxy's role wins on every request");
++
++    unsafe {
++        std::env::remove_var("RAILWATCH_BASE_PATH");
++        std::env::remove_var("RAILWATCH_TRUSTED_PROXY_SECRET_FILE");
++    }
++    std::fs::remove_dir_all(&dir).ok();
++}
+diff --git a/frontend/vite.config.ts b/frontend/vite.config.ts
+index 7877b08..54bf5f9 100644
+--- a/frontend/vite.config.ts
++++ b/frontend/vite.config.ts
+@@ -9,7 +9,10 @@ import { defineConfig } from "vite"
+ import { gemFrontend, twoRoots } from "./frontend.config"
+ 
+ export default defineConfig({
+-  base: "/vite/",
++  // Relative, so chunk imports and CSS font URLs resolve against the file
++  // that names them: the same build works at / and under a base path
++  // (RAILWATCH_BASE_PATH). The server still serves dist/ at /vite/.
++  base: "./",
+   // icon.png and icon.svg land at dist/ root.
+   publicDir: "tmp/railwatch-frontend/public",
+   server: { fs: { allow: [".", gemFrontend] } },
+-- 
+2.55.0
+
