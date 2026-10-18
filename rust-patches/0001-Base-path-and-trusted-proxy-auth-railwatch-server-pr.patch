@@ -1,7 +1,8 @@
 From 8a7f5c9047e905aff2c1260a0174d67581801576 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Sun, 18 Oct 2026 16:46:39 -0500
-Subject: [PATCH] Base path and trusted proxy auth (railwatch-server prototype)
+Subject: [PATCH 1/2] Base path and trusted proxy auth (railwatch-server
+ prototype)
 
 RAILWATCH_BASE_PATH serves every page under a prefix (/railwatch) while
 /ingest and /up stay at the root; RAILWATCH_TRUSTED_PROXY_SECRET_FILE lets

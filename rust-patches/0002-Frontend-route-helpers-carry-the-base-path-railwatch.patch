@@ -1,0 +1,33 @@
+From bfb2ce061839a94f6264394ccf3ef51ce9b3c85e Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 18 Oct 2026 17:22:59 -0500
+Subject: [PATCH 2/2] Frontend: route helpers carry the base path
+ (railwatch-mount meta)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ frontend/app/frontend/entrypoints/inertia.tsx | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/frontend/app/frontend/entrypoints/inertia.tsx b/frontend/app/frontend/entrypoints/inertia.tsx
+index f2b71e5..425c251 100644
+--- a/frontend/app/frontend/entrypoints/inertia.tsx
++++ b/frontend/app/frontend/entrypoints/inertia.tsx
+@@ -6,6 +6,14 @@ import { initializeTheme } from "@/hooks/use-appearance"
+ import PersistentLayout from "@/layouts/persistent-layout"
+ import { loadPage } from "@/lib/pages"
+ import { railwatchRootOptions, startRailwatch } from "@/lib/railwatch"
++import { configure as configureRoutes } from "@/routes"
++
++// Served under a base path (RAILWATCH_BASE_PATH), every route helper must
++// carry it; the server emits it the way the gem's embedded engine does.
++const mount = document.querySelector<HTMLMetaElement>(
++  'meta[name="railwatch-mount"]',
++)?.content
++if (mount) configureRoutes({ default_url_options: { script_name: mount } })
+ 
+ const appName = import.meta.env.VITE_APP_NAME ?? "Railwatch"
+ 
+-- 
+2.55.0
+
