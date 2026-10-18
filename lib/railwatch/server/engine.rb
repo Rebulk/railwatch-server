@@ -3,11 +3,10 @@
 module Railwatch
   module Server
     # An engine only for its app/controllers (autoloaded, so the proxy can
-    # inherit from the app's own base controller) and its rake tasks; the
-    # route is the app's, prepended so no catch-all of the app shadows it.
+    # inherit from the app's own base controller) and lib/tasks (an engine
+    # loads those itself); the route is the app's, prepended so no catch-all
+    # of the app shadows it.
     class Engine < ::Rails::Engine
-      rake_tasks { load File.expand_path("../../tasks/railwatch_server.rake", __dir__) }
-
       initializer "railwatch_server.routes" do |app|
         next unless Railwatch::Server.enabled?
 

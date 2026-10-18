@@ -79,11 +79,18 @@ module Railwatch
         server = Process.new(config: config, data_dir: data_dir, binary: Binary.path, log: log)
         stopping = false
         %w[TERM INT].each { |sig| trap(sig) { stopping = true } }
-        until stopping
-          server.ensure_running
-          sleep 0.5
+        begin
+          loop do
+            sleep 0.5
+            # Checked after the sleep: a TERM during it must not start a
+            # server on the way out.
+            break if stopping
+
+            server.ensure_running
+          end
+        ensure
+          server.stop
         end
-        server.stop
       end
     end
   end
