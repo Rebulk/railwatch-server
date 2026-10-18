@@ -61,7 +61,8 @@ module Railwatch
         return given.to_h.transform_keys(&:to_sym).reverse_merge(role: "admin") if given
 
         basic_user = ActionController::HttpAuthentication::Basic.user_name_and_password(request).first if request.authorization.to_s.start_with?("Basic ")
-        name = basic_user.presence || "Operator"
+        # Decoded base64 comes back binary; parameterize needs a real encoding.
+        name = basic_user.to_s.dup.force_encoding(Encoding::UTF_8).scrub.presence || "Operator"
         { email: "#{name.parameterize.presence || 'operator'}@railwatch.invalid", name: name, role: "admin" }
       end
 
