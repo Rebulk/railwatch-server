@@ -13,7 +13,7 @@ module Railwatch
     # (Railwatch.config.base_controller_class, with Basic off), whose
     # before_actions run first. Past the gate, each request carries a signed,
     # 60-second X-Railwatch-Proxy-Auth naming the visitor, which the server
-    # trusts (rust-patches/: trusted proxy auth); nobody signs in twice.
+    # trusts (railwatch-rs trusted proxy auth); nobody signs in twice.
     #
     # The server is served under the same path (RAILWATCH_BASE_PATH), so
     # paths, redirects, cookies, asset URLs and the live channel pass through

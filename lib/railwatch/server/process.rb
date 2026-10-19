@@ -45,7 +45,7 @@ module Railwatch
           # A second server on this data dir (the new container of a deploy,
           # which has its own loopback) answers on its own port at once and
           # relays to the one holding serve.lock through serve.sock in the
-          # data dir, until it takes over (rust-patches/0003).
+          # data dir, until it takes over (railwatch-rs RAILWATCH_STANDBY_RELAY).
           "RAILWATCH_STANDBY_RELAY" => "true",
           # The server's settings from the app (Settings), and nothing else
           # of the machine's: no installed /etc/railwatch/railwatch.env, no
@@ -204,7 +204,7 @@ module Railwatch
         @log.call("Railwatch server (pid #{@pid}) took over #{@data_dir.path}: the previous server exited")
       end
 
-      # Whether our server is relaying to another one (rust-patches/0003):
+      # Whether our server is relaying to another one (railwatch-rs RAILWATCH_STANDBY_RELAY):
       # its log says "standby: ... relaying" and not yet "acquired after".
       # Read from where this server's lines start.
       def relaying?

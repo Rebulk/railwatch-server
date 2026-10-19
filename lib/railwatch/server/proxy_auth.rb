@@ -7,7 +7,7 @@ require "openssl"
 module Railwatch
   module Server
     # The header the server trusts as "this request is user X with role Y"
-    # (rust-patches/: web/proxy_auth.rs, `trusted_proxy_secret_file`):
+    # (railwatch-rs web/proxy_auth.rs, `trusted_proxy_secret_file`):
     #
     #   v1.<base64url(claims JSON)>.<base64url(HMAC-SHA256(secret, "v1." + claims))>
     #

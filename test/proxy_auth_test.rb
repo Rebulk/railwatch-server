@@ -9,7 +9,7 @@ require_relative "../lib/railwatch/server/proxy_auth"
 class ProxyAuthTest < Minitest::Test
   SECRET = "proxy-secret-proxy-secret-proxy-secret-0123"
 
-  # The server (rust-patches/ web/proxy_auth.rs) verifies HMAC over
+  # The server (railwatch-rs web/proxy_auth.rs) verifies HMAC over
   # "v1." + payload and reads email/name/role/exp from the payload JSON.
   def test_the_header_is_what_the_server_verifies
     header = Railwatch::Server::ProxyAuth.sign(SECRET, email: "ada@example.com", name: "Ada", role: "admin", now: 1_000)

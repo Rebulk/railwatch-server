@@ -8,9 +8,8 @@ version 3 only (AGPL-3.0-only). This gem's own Ruby code is under the same
 license; see LICENSE.
 
 The Corresponding Source of the bundled binary is the railwatch-rs commit
-named in lib/railwatch/server/version.rb (RAILWATCH_RS) with the patches in
-rust-patches/ of this gem's repository applied. The running server also
-links to its source on every response (the Link header and /source).
+named in lib/railwatch/server/version.rb (RAILWATCH_RS), unmodified. The
+running server also links to its source on every response (the Link header and /source).
 Third-party code compiled into the binary keeps its own licenses, listed in
 railwatch-rs's THIRD-PARTY-LICENSES.
 

@@ -198,43 +198,29 @@ Puma workers, jobs ── railwatch agent ── /ingest ───────�
   (401, logged). It never falls back to "signed out". The server binds
   loopback only, so nothing outside the host can reach it unproxied.
 
-## The Rust patches (`rust-patches/`)
+## The server side (Rebulk/railwatch-rs)
 
-Three commits on railwatch-rs `fc318ed`. **Not pushed upstream** (0001 and
-0002 are being upstreamed separately). Every setting is off by default, so
-a self-hosted install is unchanged.
+The server features this gem relies on are upstream, in Rebulk/railwatch-rs
+`main` from `ef87f72` (PR #16), and the dashboard's mount handling is in the
+railwatch gem from 0.9.3. Every setting is off by default, so a self-hosted
+install is unchanged. Documented in railwatch-rs `docs/SELF-HOST.md`,
+"Running behind an app".
 
-1. `0001`: **`RAILWATCH_BASE_PATH`** and **`RAILWATCH_TRUSTED_PROXY_SECRET_FILE`**.
-   - Base path: pages are nested under the prefix while `/ingest` and `/up`
-     stay at the root, so the agent's URL doesn't change. Prefixed in turn:
-     redirects (`Ctx::redirect`; `back_or` strips the prefix and refuses
-     Referers outside it), cookie `Path`, the HTML document's asset, icon
-     and entry-script URLs, saved-view URLs, and the beacon. It also emits
-     `<meta name="railwatch-mount">` (the gem engine's convention) and
-     `<meta name="action-cable-url">`. Vite's base becomes `./`, so CSS
-     fonts and lazy chunks resolve relative to their own file; the same
-     build works at `/` and under a prefix.
-   - Trusted proxy: `web/proxy_auth.rs` (sign/verify/resolve), checked in
-     the session middleware and the cable handshake. The resolved user gets
-     one session row, reused; the proxy may set admin/member but never
-     demote the owner.
-   - Tests: `tests/trusted_proxy.rs` (real router over HTTP: root ingest,
-     prefixed redirects, cookies, assets, cable 101, forged/expired/too-long
-     headers 401, no provisioning on forgery, CSRF still enforced) and unit
-     tests in `proxy_auth.rs`, `config.rs`, `inertia.rs`. Full `--lib`
-     suite plus `security_poc` and `ingest_http` pass (145 + 3).
-2. `0002`: the frontend's entrypoint reads `railwatch-mount` into the
-   js-routes `script_name`, as the gem's own entrypoint does. Without it
-   every sidebar link pointed at `/apps/...`.
-3. `0003`: **`RAILWATCH_STANDBY_RELAY`** (`standby.rs`). The lock holder
-   also listens on `<data_dir>/serve.sock`; a second `serve` that finds the
-   lock held and can bind its own address relays to that socket until it
-   gets the lock, then serves the same listener. Falls back to waiting as
-   before when it can't bind (same loopback: the holder has the port), with
-   TLS or socket activation, or when the path is over 103 bytes. Tests:
-   `standby::tests` and `tests/standby_relay.rs` (45 ingest batches through
-   the standby across a TERM of the holder: all 200, all stored once);
-   `serve_lock` unchanged and passing.
+- **`RAILWATCH_BASE_PATH`**: pages are served under a prefix (`/railwatch`)
+  while `/ingest` and `/up` stay at the root, so the agent's URL doesn't
+  change. Redirects, cookie paths, asset/icon/entry URLs, emails, MCP
+  discovery and the Google callback all carry it.
+- **`RAILWATCH_TRUSTED_PROXY_SECRET_FILE`**: the server accepts an
+  HMAC-signed `X-Railwatch-Proxy-Auth` header (email, name, admin/member
+  role, `exp` at most 300 s ahead) from this gem's proxy as the signed-in
+  user. The header is stripped from every request before any route sees it,
+  even with the mode off; when on, an invalid one is a 401, never a
+  fall-back. The proxy can't create or demote an owner.
+- **`RAILWATCH_STANDBY_RELAY`**: the server holding `serve.lock` also
+  listens on `<data_dir>/serve.sock` (0600, peer uid checked); a second
+  `serve` on the same data dir binds its own loopback port at once and
+  relays to that socket until it gets the lock. This is what makes a
+  two-container deploy overlap lose nothing (see "Deploys" below).
 
 **Why a base path, not rewriting in the proxy:** URLs are made in four
 places (Rust redirects, Inertia's 409 `X-Inertia-Location`, js-routes in
@@ -246,7 +232,7 @@ the server says the right URL once and the proxy stays byte-transparent.
 ## Building
 
 ```sh
-script/build-server /path/to/railwatch-rs   # rust-patches applied, frontend/dist built (bin/build, SKIP_CARGO=1)
+script/build-server /path/to/railwatch-rs   # railwatch-rs at or after ef87f72, frontend/dist built (bin/build, SKIP_CARGO=1)
 rake gem:all                                # pkg/: ruby + 4 platform gems (~10 MB each)
 ```
 
@@ -257,7 +243,7 @@ four built here (2-3 min each, 4 jobs).
 **macOS: built natively, signed ad hoc, run in CI.** `.github/workflows/macos.yml`
 builds the frontend once on Linux, then on `macos-14` (arm64) and
 `macos-15-intel` (x86_64; GitHub retired the macos-13 runners) builds the
-server with rust-patches applied (`MACOSX_DEPLOYMENT_TARGET=11.0`, checked
+server from the pinned railwatch-rs commit (`MACOSX_DEPLOYMENT_TARGET=11.0`, checked
 with `vtool`: minos 11.0), signs it `codesign -s -`, verifies the
 signature and the arch, and runs it: `--version`, `setup` in a temp dir,
 `serve`, `/up` and `/ingest/ping`, then a second `serve` on the same data
@@ -280,7 +266,7 @@ Linux; for darwin, use the workflow's artifacts (they are signed).
 - **Two containers sharing a volume** (Kamal blue/green): each container
   has its own loopback, so the new container's agent can't reach the old
   container's server. The new container's server (`RAILWATCH_STANDBY_RELAY`,
-  rust-patches/0003) binds its own `127.0.0.1:28790` at once and splices
+  railwatch-rs `RAILWATCH_STANDBY_RELAY`) binds its own `127.0.0.1:28790` at once and splices
   every connection, byte for byte, to `storage/railwatch/serve.sock`, where
   the server holding `serve.lock` also listens. A Unix socket on the shared
   volume crosses network namespaces (same kernel, same inode). When the old
@@ -350,8 +336,9 @@ renders inside Puma's workers.
 - The account owner is a placeholder user with a random password nobody
   knows; the proxied users are admins/members. Transferring ownership
   works in Settings > Members.
-- The rust patches need upstreaming (or a fork) before this gem can ship;
-  the platform gems must be built from published source (AGPL section 6).
+- Releases must keep building the platform gems from a published
+  railwatch-rs commit (AGPL section 6): `RAILWATCH_RS_SHA` in
+  `.github/workflows/macos.yml`, and the same commit for the Linux builds.
 - Name: temporary.
 
 ## License

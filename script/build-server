@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Builds the `railwatch` binaries this gem bundles, from a railwatch-rs
-# checkout with rust-patches/ applied, into exe/<platform>/railwatch.
+# checkout (Rebulk/railwatch-rs at or after ef87f72), into exe/<platform>/railwatch.
 #
 #   script/build-server /path/to/railwatch-rs [platform...]
 #
