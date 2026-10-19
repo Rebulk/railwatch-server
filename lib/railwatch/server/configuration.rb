@@ -14,7 +14,8 @@ module Railwatch
     # Basic on and closed by default, or `base_controller_class` with Basic
     # off. One set of credentials for /railwatch whichever gem serves it.
     class Configuration
-      attr_accessor :enabled, :port, :data_dir, :mount_path, :binary, :url, :stop_timeout, :user, :wire_agent
+      attr_accessor :enabled, :port, :data_dir, :mount_path, :binary, :url, :stop_timeout, :user, :wire_agent,
+                    :max_live_connections
 
       def initialize
         @enabled = env_bool("RAILWATCH_SERVER_ENABLED", true)
@@ -41,6 +42,10 @@ module Railwatch
         # Point the railwatch agent at the bundled server when the app has not
         # configured one (no RAILWATCH_TOKEN). Off: the app wires it itself.
         @wire_agent = env_bool("RAILWATCH_SERVER_WIRE_AGENT", true)
+        # Open live-channel connections (one per dashboard tab) per app
+        # process, all spliced by one relay thread. Past it the dashboard
+        # still works, without live updates.
+        @max_live_connections = Integer(ENV.fetch("RAILWATCH_SERVER_MAX_LIVE_CONNECTIONS", "64"))
       end
 
       def data_path

@@ -8,6 +8,7 @@ require_relative "server/binary"
 require_relative "server/proxy_auth"
 require_relative "server/data_dir"
 require_relative "server/process"
+require_relative "server/relay"
 
 module Railwatch
   # The Railwatch server (the AGPL Rust binary, bundled) run next to this
