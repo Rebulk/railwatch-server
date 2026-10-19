@@ -92,7 +92,7 @@ begin
 
   # Count what the server stored, from the volume, with B stopped.
   rows = sh("docker", "run", "--rm", "-v", "#{VOL}:/s", "--entrypoint", "sh", IMAGE, "-c",
-            "ruby -rsqlite3 -e 'Dir[\"/s/railwatch/telemetry/*/core/*.sqlite3\"].each { |f| " \
+            "ruby -rsqlite3 -e 'Dir[\"/s/railwatch/**/telemetry/*/core/*.sqlite3\"].each { |f| " \
             "SQLite3::Database.new(f).execute(\"select user_ref from executions where kind = ? and user_ref is not null\", [\"request\"]).each { |r| puts r[0] } }'")
   stored = rows.lines.map(&:strip).reject(&:empty?).tally
   report = {}

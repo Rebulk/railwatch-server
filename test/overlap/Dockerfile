@@ -6,4 +6,4 @@ COPY gem/ /gem/
 COPY app/Gemfile app/Gemfile.lock ./
 RUN bundle install -j4
 COPY app/ ./
-CMD ["bin/rails", "server", "-b", "0.0.0.0", "-p", "3000"]
+CMD ["sh", "-c", "bin/rails db:prepare >/dev/null && exec bin/rails server -b 0.0.0.0 -p 3000"]

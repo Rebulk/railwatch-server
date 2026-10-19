@@ -284,6 +284,8 @@ Linux; for darwin, use the workflow's artifacts (they are signed).
   | before, SIGKILL | 793 | 582 | 211 |
   | after, `docker stop` | 795 | 795 | 0 |
   | after, SIGKILL of the old one | 789 | 771 | 18, all the old container's last second |
+  | after, fresh `rails new` app (Rails 8.1, Solid Queue), `docker stop` | 865 | 865 | 0 |
+  | after, fresh `rails new` app, SIGKILL of the old one | 845 | 828 | 17, the old container's last second |
 
   A SIGKILLed app loses what its agent had not flushed yet (up to
   `flush_interval`, here 1 s): the records were in that process's memory.

@@ -17,7 +17,9 @@ back, to `$PROBE_LOG`.
 script/build-server /path/to/railwatch-rs x86_64-linux
 # an app dir with Gemfile `gem "railwatch-server", path: "/gem"`, a
 # /widgets action that runs one query, sqlite in storage/, force_ssl off,
-# test/overlap/probe.rb as config/initializers/zz_overlap_probe.rb
+# test/overlap/probe.rb as config/initializers/zz_overlap_probe.rb, and
+# production's databases under storage/ (rails new's database.yml has the
+# paths commented out; the Dockerfile runs db:prepare first, as Kamal does)
 mkdir -p /var/tmp/rws-overlap && cp test/overlap/{Dockerfile,overlap.rb} /var/tmp/rws-overlap/
 rsync -a <app>/ /var/tmp/rws-overlap/app/
 rsync -a --exclude .git ./ /var/tmp/rws-overlap/gem/
