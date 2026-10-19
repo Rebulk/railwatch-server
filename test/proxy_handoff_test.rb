@@ -48,6 +48,17 @@ class ProxyHandoffTest < Minitest::Test
     assert upstream.closed?
   end
 
+  def test_an_exception_after_the_controller_closes_the_server_connection
+    upstream, = UNIXSocket.pair
+    app = lambda do |e|
+      e[Handoff::ENV_KEY] = Handoff::Handoff.new(upstream, "GET / HTTP/1.1\r\n\r\n", nil)
+      raise "boom"
+    end
+
+    assert_raises(RuntimeError) { Handoff.new(app).call({}) }
+    assert upstream.closed?
+  end
+
   def test_other_requests_pass_through_untouched
     response = [ 200, { "content-type" => "text/plain" }, [ "hi" ] ]
     assert_equal response, Handoff.new(->(_) { response }).call({})

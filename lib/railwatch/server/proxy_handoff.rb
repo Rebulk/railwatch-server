@@ -26,7 +26,13 @@ module Railwatch
       end
 
       def call(env)
-        status, headers, body = @app.call(env)
+        begin
+          status, headers, body = @app.call(env)
+        rescue Exception # rubocop:disable Lint/RescueException
+          # Raised after the controller: its server connection is ours to close.
+          env.delete(ENV_KEY)&.then { |h| [ h.upstream, h.body ].compact.each { |io| io.close rescue nil } }
+          raise
+        end
         handoff = env.delete(ENV_KEY)
         return [ status, headers, body ] unless handoff
 
