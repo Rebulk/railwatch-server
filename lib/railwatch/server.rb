@@ -7,6 +7,7 @@ require_relative "server/configuration"
 require_relative "server/binary"
 require_relative "server/proxy_auth"
 require_relative "server/data_dir"
+require_relative "server/settings"
 require_relative "server/process"
 require_relative "server/relay"
 
@@ -55,7 +56,9 @@ module Railwatch
 
         app = defined?(Rails) && Rails.application ? Rails.application.class.module_parent_name : "App"
         env = defined?(Rails) ? Rails.env.to_s : "production"
-        server_env = Process.new(config: config, data_dir: dir, binary: Binary.path, log: log).env
+        # setup needs none of the app's settings (server.env is written at
+        # the first start, after this).
+        server_env = Process.new(config: config, data_dir: dir, binary: Binary.path, log: log).env.merge("RAILWATCH_ENV_FILE" => File::NULL)
         done = dir.provision!(binary: Binary.path, env: server_env, app_name: app, env_name: env)
         log.call("provisioned #{dir.path}: #{done.join(', ')}") if done.any?
         dir

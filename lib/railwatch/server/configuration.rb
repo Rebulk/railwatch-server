@@ -15,7 +15,7 @@ module Railwatch
     # off. One set of credentials for /railwatch whichever gem serves it.
     class Configuration
       attr_accessor :enabled, :port, :data_dir, :mount_path, :binary, :url, :stop_timeout, :user, :wire_agent,
-                    :max_live_connections
+                    :max_live_connections, :smtp, :mail_from, :backup, :google, :retention, :alert_delivery, :server_env
 
       def initialize
         @enabled = env_bool("RAILWATCH_SERVER_ENABLED", true)
@@ -46,6 +46,22 @@ module Railwatch
         # process, all spliced by one relay thread. Past it the dashboard
         # still works, without live updates.
         @max_live_connections = Integer(ENV.fetch("RAILWATCH_SERVER_MAX_LIVE_CONNECTIONS", "64"))
+        # The server's own settings (Settings): nil means "from the app"
+        # (Action Mailer's SMTP and From, credentials.railwatch_server's
+        # backup and google), false/{} turns one off.
+        #   smtp:      { address:, port:, user_name:, password:, enable_starttls:, tls: }
+        #   backup:    { endpoint:, bucket:, access_key_id:, secret_access_key:, region:, prefix:, interval_seconds: }
+        #   google:    { client_id:, client_secret: }
+        #   retention: { detail_days:, core_days_max: }
+        @smtp = nil
+        @mail_from = nil
+        @backup = nil
+        @google = nil
+        @retention = nil
+        # true/false: send alerts or only record them. nil: the server's default (on).
+        @alert_delivery = nil
+        # Any other RAILWATCH_* setting of the server, by name.
+        @server_env = {}
       end
 
       def data_path

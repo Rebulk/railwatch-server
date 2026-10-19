@@ -47,10 +47,11 @@ module Railwatch
           # relays to the one holding serve.lock through serve.sock in the
           # data dir, until it takes over (rust-patches/0003).
           "RAILWATCH_STANDBY_RELAY" => "true",
-          # The app's own environment must not configure the server: no
-          # installed /etc/railwatch/railwatch.env, no railwatch.toml from
-          # the app's directory, no systemd sockets meant for Puma.
-          "RAILWATCH_ENV_FILE" => File::NULL,
+          # The server's settings from the app (Settings), and nothing else
+          # of the machine's: no installed /etc/railwatch/railwatch.env, no
+          # railwatch.toml from the app's directory, no systemd sockets
+          # meant for Puma.
+          "RAILWATCH_ENV_FILE" => @data_dir.settings_file.to_s,
           "RAILWATCH_CONFIG" => nil,
           "LISTEN_FDS" => nil, "LISTEN_PID" => nil, "LISTEN_FDNAMES" => nil
         }
@@ -97,6 +98,7 @@ module Railwatch
 
       def start
         stop_orphan
+        write_settings
         # Another server already answers on the port: another app process
         # on this host and loopback (a second Puma) whose server owns the
         # data dir. Ours waits on serve.lock and takes over when that one
@@ -165,6 +167,20 @@ module Railwatch
         Net::HTTP.get_response(URI("#{@config.local_url}/up")).is_a?(Net::HTTPSuccess)
       rescue SystemCallError, IOError, Net::OpenTimeout, Net::ReadTimeout
         false
+      end
+
+      # Re-read on every start, so a restart picks up changed credentials.
+      # Names only in the log, never values.
+      def write_settings
+        settings = Settings.new(@config)
+        env = settings.env
+        settings.write!(@data_dir.settings_file.to_s)
+        groups = settings.groups(env)
+        @log.call("Railwatch server settings from the app: #{groups.join(', ')}") if groups.any? && groups != @logged_groups
+        @logged_groups = groups
+      rescue Settings::Invalid => e
+        @log.call("Railwatch server settings NOT applied: #{e.message}")
+        Settings.new(Configuration.new, rails: nil).write!(@data_dir.settings_file.to_s)
       end
 
       def write_pid_file

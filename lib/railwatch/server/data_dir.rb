@@ -14,6 +14,7 @@ module Railwatch
     #   ingest_token     the first environment's rw_ token (0600), so every
     #                    process of the app can report without asking
     #   server.log       the server's stdout and stderr
+    #   server.env       the server's settings from the app (Settings, 0600)
     #
     # Provisioning runs `railwatch setup` once, before the first `serve`:
     # setup refuses a data dir that already has users, so it is idempotent by
@@ -31,6 +32,7 @@ module Railwatch
       def proxy_secret_file = path.join("proxy_secret")
       def token_file = path.join("ingest_token")
       def log_file = path.join("server.log")
+      def settings_file = path.join("server.env")
 
       def token
         token_file.read.strip if token_file.exist?
