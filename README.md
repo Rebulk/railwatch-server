@@ -79,6 +79,10 @@ whether the server is up, and where the agent reports.
 | `RAILWATCH_SERVER_STOP_TIMEOUT` | `15` | seconds Puma's exit waits for the server to drain |
 | `RAILWATCH_SERVER_WIRE_AGENT` | `true` | off: you configure the agent yourself |
 | `RAILWATCH_SERVER_MAX_LIVE_CONNECTIONS` | `64` | open live-update connections per app process (one per dashboard tab); past it the dashboard works without live updates |
+| `RAILWATCH_SERVER_MAX_PROXIED_REQUESTS` | `64` | dashboard requests in flight per app process (waiting on the server or streaming back); past it a dashboard request gets 503 with `Retry-After: 1` at once. The app's own requests are never affected |
+| `RAILWATCH_SERVER_PROXY_CONNECT_TIMEOUT` | `2` | seconds to connect to the server on loopback; past it, 503 |
+| `RAILWATCH_SERVER_PROXY_FIRST_BYTE_TIMEOUT` | `120` | seconds for the server to start answering a dashboard request; past it, 504 |
+| `RAILWATCH_SERVER_PROXY_IDLE_TIMEOUT` | `60` | seconds a response that has started may go without a byte moving; past it the connection is closed |
 
 **Environments.** One environment per data dir, named after `Rails.env`:
 development, staging and production usually run on different machines,
@@ -151,11 +155,29 @@ Puma workers, jobs ── railwatch agent ── /ingest ───────�
 - **Proxy.** `/railwatch/*` is a prepended route to
   `Railwatch::Server::ProxyController`. It forwards the server's cookies
   and Inertia headers, sets `Host`/`X-Forwarded-Proto`, adds the signed
-  header, and streams: the response's headers go back as soon as the
-  server sends them and the body as Puma writes it (a 160 KB body
-  trickled over 8 s reached the browser after 0.01 s); request bodies
-  stream from `rack.input` (a 60 MB upload left the worker's peak RSS
-  unchanged). Encodings pass through untouched. It doesn't rewrite paths:
+  header, and hands the request off: **no Puma thread waits for the
+  server.** Past the gate the controller connects to the server and leaves
+  the request to `ProxyHandoff`, a middleware outside every other one,
+  which takes the browser's socket with Rack hijack and gives both
+  sockets to the process's one `Relay` thread (the live channel's, below).
+  The Relay writes the request (Puma has already read the body; a large
+  one comes from Puma's tempfile) and passes the response back as it
+  arrives, byte for byte except the head: `Connection: close` (the browser,
+  or the proxy in front of the app, opens a new connection for the next
+  request) and the app's own `Set-Cookie` (a rolling session) added. A
+  response the server hasn't started within the first-byte timeout is a
+  504 and one it drops before answering a 502, both written by the Relay;
+  one that goes quiet mid-body is cut off after the idle timeout.
+  Measured (`test/e2e/slow_dashboard.rb`, Puma 1 worker x 3 threads, pages
+  taking 3 s): before, 6 slow loads made the app's `/up` wait 5.7 s;
+  after, 4 ms. With 30 slow loads at once the worker kept its 13 threads,
+  RSS rose 131 -> 137 MB and `/up` stayed under 12 ms. Encodings pass
+  through untouched. Without Rack hijack, and under Puma's own TLS (`ssl_bind`;
+  its socket wrapper holds decrypted bytes `IO.select` can't see), the
+  response is streamed from the Puma thread instead, as before: headers
+  as soon as the server sends them, the body as Puma writes it. Behind
+  Thruster, kamal-proxy or nginx the app sees plain HTTP/1.1 and the
+  handoff applies; HTTP/2 ends at that proxy. It doesn't rewrite paths:
   the server itself serves under `/railwatch` (below). CSRF is the
   server's own (Origin check plus its token), so Rails' check is off for
   this controller, and so is inertia_rails' (its middleware otherwise
@@ -163,11 +185,12 @@ Puma workers, jobs ── railwatch agent ── /ingest ───────�
   `XSRF-TOKEN` at `Path=/` shadowed the server's, refusing every write).
   Commenting, resolving, saving a view and changing a setting are tested
   through the proxy (`test/e2e/browser_writes.rb`, and by hand in Chromium).
-- **Live channel.** `/railwatch/cable` is a Rack hijack; the browser's and
-  the server's sockets are spliced by one `IO.select` thread per app
-  process (`Relay`), not two threads per socket: 30 open dashboards cost
-  one thread. At most `max_live_connections` per process; past it the
-  handshake gets 503 and the dashboard falls back to reloading.
+- **Live channel.** `/railwatch/cable` is a Rack hijack too; the browser's
+  and the server's sockets are spliced by the same `IO.select` thread per
+  app process (`Relay`), not two threads per socket: 30 open dashboards
+  cost one thread. At most `max_live_connections` per process, counted
+  apart from dashboard requests; past it the handshake gets 503 and the
+  dashboard falls back to reloading.
 - **Trust.** `storage/railwatch/proxy_secret` (0600, generated) is the
   HMAC key. The header is `v1.<claims>.<HMAC-SHA256>` with
   `email, name, role, exp`; the server refuses a bad signature, an expired
@@ -310,8 +333,13 @@ renders inside Puma's workers.
 
 ## Limitations and TODOs
 
-- A slow dashboard response holds a Puma thread for as long as it
-  streams (as any Rails response does). Live-channel sockets do not.
+- Dashboard connections close after each response (no keep-alive
+  between the browser and the proxy for `/railwatch`). On loopback or
+  behind a reverse proxy that costs nothing measurable; a browser talking
+  straight to Puma over the internet opens a new TCP connection per
+  dashboard request.
+- The cap is per process and checked before connecting, so a burst can
+  pass it by as many requests as Puma has threads.
 - macOS binaries are ad-hoc signed only: fine for a gem installed with
   Bundler (RubyGems sets no quarantine flag). A notarized release needs an
   Apple Developer ID certificate in CI (`codesign -s "Developer ID
