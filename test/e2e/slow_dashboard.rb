@@ -11,9 +11,9 @@
 #   ruby test/e2e/slow_dashboard.rb [/path/to/app]
 #
 # Also checks, through the proxy, what the fake server makes easy to check:
-# a trickled chunked response streams, an upload arrives whole, the app's
-# own session cookie is still set next to the server's, the server down is a
-# 503, and past max_proxied_requests the visitor gets a 503 at once.
+# a trickled chunked response streams, an upload arrives whole, the
+# server's cookie comes back, the server down is a 503, and past
+# max_proxied_requests the visitor gets a 503 at once.
 require "net/http"
 require "socket"
 require "tmpdir"
@@ -134,11 +134,18 @@ begin
   http(:Get, "/railwatch/warm") # load the controller
 
   # --- the reproduction ----------------------------------------------------
+  worker = `pgrep -P #{puma} -f "cluster worker"`.split.first.to_i
+  sample = -> { [ Dir["/proc/#{worker}/task/*"].size, File.read("/proc/#{worker}/status")[/VmRSS:\s+(\d+)/, 1].to_i / 1024 ] }
+  before = sample.call
+  peak = before.dup
+  sampling = Thread.new { loop { peak = peak.zip(sample.call).map(&:max); sleep 0.01 } }
   _, idle = timed { http(:Get, "/up") }
   slow = Array.new(SLOW) { Thread.new { timed { http(:Get, "/railwatch/slow") } } }
   sleep 0.3 # every slow load is waiting on the server
   during = Array.new(5) { timed { http(:Get, "/up") }.then { |r, t| [ r.code, t ] } }
   results = slow.map(&:value)
+  sampling.kill
+  puts "Puma worker: #{before[0]} threads, #{before[1]} MB before; peak #{peak[0]} threads, #{peak[1]} MB during the slow loads"
   worst = during.map(&:last).max
   puts "/up idle #{ms(idle)}; during #{SLOW} slow loads (#{DELAY} s each, 3 threads): " \
        "#{during.map { |_, t| ms(t) }.join(', ')}; slow loads #{results.map { |r, t| "#{r.code}/#{t.round(1)}s" }.join(' ')}"

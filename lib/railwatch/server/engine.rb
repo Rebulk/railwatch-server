@@ -17,6 +17,15 @@ module Railwatch
         end
       end
 
+      # Outside every other middleware (the railwatch agent's included), so
+      # the app's session and cookies are written before the browser's socket
+      # is handed to the relay (ProxyHandoff).
+      initializer "railwatch_server.handoff" do |app|
+        next unless Railwatch::Server.enabled?
+
+        app.middleware.insert_before 0, Railwatch::Server::ProxyHandoff
+      end
+
       # After the app's initializers (and the railwatch gem's credentials
       # lookup), before the railwatch gem's reporter adopts its final config.
       initializer "railwatch_server.agent", after: :load_config_initializers, before: "railwatch.adopt_final_config" do

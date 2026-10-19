@@ -19,6 +19,15 @@ module Railwatch
     # paths, redirects, cookies, asset URLs and the live channel pass through
     # unrewritten. CSRF is the server's: it checks Origin and its own token
     # on every write, so Rails' check is skipped here.
+    #
+    # No Puma thread waits for the server. Past the gate, the request (which
+    # Puma has read in full) is left to ProxyHandoff, which takes the socket
+    # from Puma and gives it to the process's one Relay thread; the Relay
+    # writes the request to the server and the response back, then closes
+    # the connection (Connection: close: the browser, or the proxy in front
+    # of the app, opens a new one for the next request). Where the socket
+    # can't be taken (a server without Rack hijack, Puma's own TLS) the
+    # response is streamed from this thread instead (#stream).
     class ProxyController < Railwatch.config.base_controller_class.constantize
       # One upstream request whose response body is read as Puma writes it.
       # Net::HTTP reads a body only inside the block of #request; a Fiber
@@ -29,8 +38,8 @@ module Railwatch
       class Upstream
         def initialize(request, headers, port:)
           @http = Net::HTTP.new("127.0.0.1", port)
-          @http.open_timeout = 2
-          @http.read_timeout = 120
+          @http.open_timeout = Railwatch::Server.config.proxy_connect_timeout
+          @http.read_timeout = Railwatch::Server.config.proxy_first_byte_timeout
           @http.max_retries = 0
           # Byte-transparent: the browser's Accept-Encoding, or identity. A
           # request built without one gets Net::HTTP's gzip default and its
@@ -121,8 +130,10 @@ module Railwatch
 
         if websocket?
           tunnel(secret)
+        elsif hijackable?
+          hand_off(secret)
         else
-          relay(secret)
+          stream(secret)
         end
       end
 
@@ -168,12 +179,72 @@ module Railwatch
         headers
       end
 
-      # The response is streamed: status and headers as soon as the server
-      # sends them, then the body as Puma writes it (Upstream#each), so a
-      # large export or a slow page never sits whole in this process. The
-      # request body is streamed too, from rack.input (Puma spools a large
-      # one to a tempfile), instead of being read into a string.
-      def relay(secret)
+      # The browser's socket can be taken from the app server and moved with
+      # IO.select: Rack hijack, and a plain socket (not Puma's own TLS, whose
+      # socket wrapper keeps decrypted bytes the relay could not see).
+      def hijackable?
+        return false unless request.env["rack.hijack"]
+
+        socket = request.env["puma.socket"]
+        socket.nil? || socket.is_a?(::BasicSocket)
+      end
+
+      # Connects to the server and leaves the request to ProxyHandoff; the
+      # empty 200 here is never sent. Past max_proxied_requests the visitor
+      # gets a 503 at once.
+      def hand_off(secret)
+        relay = Relay.current
+        if relay.full?(:proxied)
+          Rails.logger.warn("[railwatch-server] #{relay.max(:proxied)} dashboard requests in flight (max_proxied_requests); refusing another")
+          response.headers["Retry-After"] = "1"
+          return render(plain: "The dashboard is busy (#{relay.max(:proxied)} requests in flight in this process). Try again in a moment.",
+                        status: :service_unavailable)
+        end
+
+        upstream = connect
+        request_head, body = upstream_request(secret)
+        request.env[ProxyHandoff::ENV_KEY] = ProxyHandoff::Handoff.new(upstream, request_head, body)
+        head :ok
+      rescue SystemCallError, IOError => e
+        upstream&.close rescue nil
+        unavailable("#{e.class}: #{e.message}")
+      end
+
+      def connect
+        TCPSocket.new("127.0.0.1", Railwatch::Server.config.port, connect_timeout: Railwatch::Server.config.proxy_connect_timeout)
+      rescue IO::TimeoutError => e
+        raise Errno::ETIMEDOUT, e.message
+      end
+
+      # The request as the server gets it: its head (and its body, when Puma
+      # kept that in memory), and the body Puma spooled to a tempfile, as a
+      # second descriptor of it (Puma closes its own when this thread
+      # returns). Puma has read the body in full and decoded a chunked one,
+      # so it always has a length.
+      def upstream_request(secret)
+        input = request.body
+        input.rewind if input.respond_to?(:rewind)
+        length = request.content_length.to_i
+        body = input.is_a?(::File) ? input.dup : nil
+        # The browser's HTTP version: an HTTP/1.0 client (nginx's default
+        # upstream protocol) can't read a chunked response, and the server
+        # doesn't send one to an HTTP/1.0 request.
+        version = request.get_header("SERVER_PROTOCOL") == "HTTP/1.0" ? "HTTP/1.0" : "HTTP/1.1"
+        headers = upstream_headers(secret)
+        headers["Accept-Encoding"] = request.headers["Accept-Encoding"].presence || "identity"
+        headers["Content-Length"] = length.to_s if length.positive? || request.content_length
+        headers["Connection"] = "close"
+        head = "#{request.request_method} #{request.fullpath} #{version}\r\n" \
+               "#{headers.map { |k, v| "#{k}: #{v.to_s.delete("\r\n")}\r\n" }.join}\r\n".b
+        head << input.read.to_s.b if body.nil? && length.positive?
+        [ head, body ]
+      end
+
+      # Without hijack: the response is streamed from this thread, status and
+      # headers as soon as the server sends them, then the body as the app
+      # server writes it (Upstream#each), so a large export never sits whole
+      # in this process. The request body is streamed too, from rack.input.
+      def stream(secret)
         upstream = Upstream.new(request, upstream_headers(secret), port: Railwatch::Server.config.port)
         response = upstream.start
         response.each_header do |name, _|
@@ -204,11 +275,11 @@ module Railwatch
         return head(:not_implemented) unless hijack
 
         relay = Relay.current
-        if relay.size >= relay.max
-          Rails.logger.warn("[railwatch-server] #{relay.max} live-channel connections open (max_live_connections); refusing another")
+        if relay.full?(:live)
+          Rails.logger.warn("[railwatch-server] #{relay.max(:live)} live-channel connections open (max_live_connections); refusing another")
           return head(:service_unavailable)
         end
-        upstream = TCPSocket.new("127.0.0.1", Railwatch::Server.config.port)
+        upstream = connect
         handshake = upstream_headers(secret).merge(
           "Connection" => "Upgrade", "Upgrade" => "websocket",
           "Sec-WebSocket-Key" => request.headers["Sec-WebSocket-Key"],
@@ -223,7 +294,7 @@ module Railwatch
         end
         self.status = -1
         self.response_body = []
-      rescue Errno::ECONNREFUSED => e
+      rescue SystemCallError => e
         unavailable("#{e.class}: #{e.message}")
       end
 

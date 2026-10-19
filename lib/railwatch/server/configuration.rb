@@ -15,7 +15,8 @@ module Railwatch
     # off. One set of credentials for /railwatch whichever gem serves it.
     class Configuration
       attr_accessor :enabled, :port, :data_dir, :mount_path, :binary, :url, :stop_timeout, :user, :wire_agent,
-                    :max_live_connections, :smtp, :mail_from, :backup, :google, :retention, :alert_delivery, :server_env
+                    :max_live_connections, :max_proxied_requests, :proxy_connect_timeout, :proxy_first_byte_timeout,
+                    :proxy_idle_timeout, :smtp, :mail_from, :backup, :google, :retention, :alert_delivery, :server_env
 
       def initialize
         # nil: on, except under Rails.env.test (a test run on a machine with
@@ -50,6 +51,18 @@ module Railwatch
         # process, all spliced by one relay thread. Past it the dashboard
         # still works, without live updates.
         @max_live_connections = Integer(ENV.fetch("RAILWATCH_SERVER_MAX_LIVE_CONNECTIONS", "64"))
+        # Dashboard requests waiting on the server or streaming back, per app
+        # process, all moved by that same relay thread instead of a Puma
+        # thread each. Past it a dashboard request gets 503 and Retry-After
+        # at once; the app's own requests are never affected.
+        @max_proxied_requests = Integer(ENV.fetch("RAILWATCH_SERVER_MAX_PROXIED_REQUESTS", "64"))
+        # Seconds: to connect to the server (on loopback: it is down, or past
+        # its own connection cap), for it to start answering a dashboard
+        # request (504 past it; the slowest page at 30 days takes seconds),
+        # and for a response that has started to move again (cut off past it).
+        @proxy_connect_timeout = Float(ENV.fetch("RAILWATCH_SERVER_PROXY_CONNECT_TIMEOUT", "2"))
+        @proxy_first_byte_timeout = Float(ENV.fetch("RAILWATCH_SERVER_PROXY_FIRST_BYTE_TIMEOUT", "120"))
+        @proxy_idle_timeout = Float(ENV.fetch("RAILWATCH_SERVER_PROXY_IDLE_TIMEOUT", "60"))
         # The server's own settings (Settings): nil means "from the app"
         # (Action Mailer's SMTP and From, credentials.railwatch_server's
         # backup and google), false/{} turns one off.
