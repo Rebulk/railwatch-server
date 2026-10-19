@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "net/http"
+require "socket"
 
 module Railwatch
   module Server
@@ -12,10 +13,12 @@ module Railwatch
     # reaches Puma only: Puma drains its requests, its reporter flushes the
     # last batches into this server, and only then is the server stopped.
     #
-    # `server.pid` in the data dir holds "<child pid> <parent pid>". A Puma
-    # that was SIGKILLed cannot stop its child, which would then hold
+    # `server.pid` in the data dir holds "<child pid> <parent pid> <host>". A
+    # Puma that was SIGKILLed cannot stop its child, which would then hold
     # serve.lock forever and make every later server wait; the next start
     # finds the record, sees the parent gone, and stops the orphan first.
+    # Only on the same host name: the data dir may be a volume shared with
+    # another container, whose pids mean other processes here.
     class Process
       BACKOFF = [ 1, 2, 4, 8, 15, 30 ].freeze
       READY_TIMEOUT = 15
@@ -39,6 +42,11 @@ module Railwatch
           "RAILWATCH_URL" => @config.url || @config.local_url,
           "RAILWATCH_BASE_PATH" => @config.normalized_mount_path,
           "RAILWATCH_TRUSTED_PROXY_SECRET_FILE" => @data_dir.proxy_secret_file.to_s,
+          # A second server on this data dir (the new container of a deploy,
+          # which has its own loopback) answers on its own port at once and
+          # relays to the one holding serve.lock through serve.sock in the
+          # data dir, until it takes over (rust-patches/0003).
+          "RAILWATCH_STANDBY_RELAY" => "true",
           # The app's own environment must not configure the server: no
           # installed /etc/railwatch/railwatch.env, no railwatch.toml from
           # the app's directory, no systemd sockets meant for Puma.
@@ -90,11 +98,13 @@ module Railwatch
       def start
         stop_orphan
         # Another server already answers on the port: another app process
-        # on this host (a second Puma, the old container of a deploy) whose
-        # server owns the data dir. Ours will wait on serve.lock and take
-        # over when that one exits; meanwhile every agent reports to it.
+        # on this host and loopback (a second Puma) whose server owns the
+        # data dir. Ours waits on serve.lock and takes over when that one
+        # exits; meanwhile every agent here reports to it.
         @standby = up?
         log = File.open(@data_dir.log_file, "a")
+        @log_offset_at_spawn = log.size
+        @relay_log_offset = nil
         @pid = ::Process.spawn(env, @binary, "serve", chdir: @data_dir.path.to_s, in: File::NULL, out: log, err: log, pgroup: true)
         log.close
         if @standby
@@ -107,7 +117,12 @@ module Railwatch
         started = monotonic
         @log.call("Railwatch server starting (pid #{@pid}, 127.0.0.1:#{@config.port}, data #{@data_dir.path}, log #{@data_dir.log_file})")
         if wait_until_ready(started)
-          @log.call("Railwatch server ready in #{((monotonic - started) * 1000).round} ms; dashboard at #{@config.normalized_mount_path}")
+          relaying = relaying?
+          @standby = relaying
+          @log.call(relaying ? "Railwatch server (pid #{@pid}) answering on 127.0.0.1:#{@config.port} in #{((monotonic - started) * 1000).round} ms " \
+                               "as a standby: another app process (the old container of a deploy) holds #{@data_dir.path}/serve.lock; " \
+                               "this one relays to it through serve.sock and takes over when it exits" :
+                               "Railwatch server ready in #{((monotonic - started) * 1000).round} ms; dashboard at #{@config.normalized_mount_path}")
           @failures = 0
         elsif alive?
           waiting = File.read(@data_dir.log_file).lines.last(5).grep(/waiting for .*serve\.lock/).any?
@@ -140,7 +155,7 @@ module Railwatch
         nil
       ensure
         pid_file = @data_dir.path.join("server.pid")
-        pid_file.delete if @pid && pid_file.exist? && pid_file.read.split.first.to_i == @pid
+        pid_file.delete if @pid && pid_file.exist? && pid_file.read.split.values_at(0, 2) == [ @pid.to_s, Socket.gethostname ]
         @pid = nil
       end
 
@@ -153,17 +168,42 @@ module Railwatch
       end
 
       def write_pid_file
-        File.write(@data_dir.path.join("server.pid"), "#{@pid} #{::Process.pid}\n")
+        File.write(@data_dir.path.join("server.pid"), "#{@pid} #{::Process.pid} #{Socket.gethostname}\n")
       end
 
-      # The other server exited (it deletes server.pid on a clean stop) and
-      # ours, holding serve.lock now, answers on the port.
+      # The other server exited and ours holds serve.lock now. Same
+      # loopback: the other deleted server.pid on a clean stop and ours
+      # answers on the port. Relaying (another container): ours said in its
+      # log that it acquired the lock.
       def took_over
-        return if @data_dir.path.join("server.pid").exist? || !up?
+        if @relay_log_offset
+          return if relaying?
+        else
+          return if @data_dir.path.join("server.pid").exist? || !up?
+        end
 
         @standby = false
+        @relay_log_offset = nil
         write_pid_file
         @log.call("Railwatch server (pid #{@pid}) took over #{@data_dir.path}: the previous server exited")
+      end
+
+      # Whether our server is relaying to another one (rust-patches/0003):
+      # its log says "standby: ... relaying" and not yet "acquired after".
+      # Read from where this server's lines start.
+      def relaying?
+        @relay_log_offset ||= relay_log_start
+        lines = File.open(@data_dir.log_file) { |f| f.seek(@relay_log_offset); f.read }.lines
+        started = lines.rindex { |l| l.include?("railwatch: standby:") && l.include?("relaying") }
+        return false unless started
+
+        lines[started..].none? { |l| l.include?("serve.lock acquired after") }
+      rescue SystemCallError
+        false
+      end
+
+      def relay_log_start
+        @log_offset_at_spawn || 0
       end
 
       def wait_until_ready(started)
@@ -184,7 +224,9 @@ module Railwatch
         file = @data_dir.path.join("server.pid")
         return unless file.exist?
 
-        child, parent = file.read.split.map(&:to_i)
+        child, parent, host = file.read.split
+        child, parent = child.to_i, parent.to_i
+        return if host != Socket.gethostname
         return if child <= 0 || parent == ::Process.pid || process?(parent) || !process?(child)
 
         @log.call("Railwatch server pid #{child} was left behind by pid #{parent}, which is gone; stopping it")

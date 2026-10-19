@@ -131,10 +131,11 @@ Puma workers, jobs ── railwatch agent ── /ingest ───────�
   (401, logged). It never falls back to "signed out". The server binds
   loopback only, so nothing outside the host can reach it unproxied.
 
-## The Rust patch (`rust-patches/`)
+## The Rust patches (`rust-patches/`)
 
-Two commits on railwatch-rs `fc318ed`. **Not pushed upstream.** Both
-settings are off by default, so a self-hosted install is unchanged.
+Three commits on railwatch-rs `fc318ed`. **Not pushed upstream** (0001 and
+0002 are being upstreamed separately). Every setting is off by default, so
+a self-hosted install is unchanged.
 
 1. `0001`: **`RAILWATCH_BASE_PATH`** and **`RAILWATCH_TRUSTED_PROXY_SECRET_FILE`**.
    - Base path: pages are nested under the prefix while `/ingest` and `/up`
@@ -158,6 +159,15 @@ settings are off by default, so a self-hosted install is unchanged.
 2. `0002`: the frontend's entrypoint reads `railwatch-mount` into the
    js-routes `script_name`, as the gem's own entrypoint does. Without it
    every sidebar link pointed at `/apps/...`.
+3. `0003`: **`RAILWATCH_STANDBY_RELAY`** (`standby.rs`). The lock holder
+   also listens on `<data_dir>/serve.sock`; a second `serve` that finds the
+   lock held and can bind its own address relays to that socket until it
+   gets the lock, then serves the same listener. Falls back to waiting as
+   before when it can't bind (same loopback: the holder has the port), with
+   TLS or socket activation, or when the path is over 103 bytes. Tests:
+   `standby::tests` and `tests/standby_relay.rs` (45 ingest batches through
+   the standby across a TERM of the holder: all 200, all stored once);
+   `serve_lock` unchanged and passing.
 
 **Why a base path, not rewriting in the proxy:** URLs are made in four
 places (Rust redirects, Inertia's 409 `X-Inertia-Location`, js-routes in
@@ -197,22 +207,41 @@ check that the 11.3 SDK floor is fine.
   during the overlap and 10 after, 30 of 30 stored; one server writes at
   any time.
 - **Two containers sharing a volume** (Kamal blue/green): each container
-  has its own loopback, so the new container's server can't answer on the
-  old one's port. It waits on `serve.lock` (flock works across containers
-  on one host's volume) and **refuses connections until the old container
-  stops**. The new container's agent gets ECONNREFUSED and retries on its
-  1, 2, 4 ... 60 s ladder (8 attempts, about 4 minutes, then the batch is
-  dropped). In two runs only 2 and 1 of the new container's 10 requests
-  arrived. The likely cause (not proven): while a batch is retained the
-  agent's backpressure climbs to 8x, and its sampler divides the request
-  sample rate by that factor, so most requests are never recorded at all.
-  The server logged batches arriving with `backpressure_factor` 8.0 right
-  after the takeover. Two fixes are open: have the standby server accept ingest into a spool (Rust), or
-  have the new container proxy `/ingest` to whichever server holds the
-  lock through a Unix socket in the data dir instead of TCP loopback.
-  **Until then: during a deploy overlap, telemetry from the new container
-  is partly lost.** Volumes on two different hosts are not supported
-  (flock doesn't cross hosts; each host would need its own data dir, which
+  has its own loopback, so the new container's agent can't reach the old
+  container's server. The new container's server (`RAILWATCH_STANDBY_RELAY`,
+  rust-patches/0003) binds its own `127.0.0.1:28790` at once and splices
+  every connection, byte for byte, to `storage/railwatch/serve.sock`, where
+  the server holding `serve.lock` also listens. A Unix socket on the shared
+  volume crosses network namespaces (same kernel, same inode). When the old
+  container stops, its server drains and exits, the standby takes the lock
+  and serves the same listener itself; connections in that gap retry the
+  socket for up to 30 s. The log says "as a standby" then "took over".
+
+  Why this mattered (measured, `test/overlap/`, 3 runs before the fix): the
+  new container's first delivery was refused, the agent retained it and
+  retried on its ladder, and every retained retry doubled its backpressure
+  factor (1, 2, 4, 8). The sampler divides the request sample rate by that
+  factor, so for the ~12 s until the old server exited the new container
+  recorded 1 in 2, 1 in 4, then 1 in 8 of its requests. The dropped ones were
+  never recorded at all; nothing that reached the agent's buffer was lost.
+  186, 184 and 197 of ~480 requests went unrecorded, every one at a factor
+  of 2, 4 or 8, none at 1. With `RAILWATCH_BACKPRESSURE=false` the same
+  overlap stored 476/476: the batches themselves all arrived on retry.
+  Starting the server before Puma accepts requests (under `bin/rails s`)
+  also removes the one refused delivery at boot that cost 5-9 requests.
+
+  | handover, ~800 requests | served | stored once | lost |
+  |---|---|---|---|
+  | before, `docker stop` | 795 | 602 | 193 (new container: 186) |
+  | before, SIGKILL | 793 | 582 | 211 |
+  | after, `docker stop` | 795 | 795 | 0 |
+  | after, SIGKILL of the old one | 789 | 771 | 18, all the old container's last second |
+
+  A SIGKILLed app loses what its agent had not flushed yet (up to
+  `flush_interval`, here 1 s): the records were in that process's memory.
+  The new container lost nothing in either run, and no record was stored
+  twice. Volumes on two different hosts are not supported (flock and Unix
+  sockets don't cross hosts; each host would need its own data dir, which
   splits the history).
 
 ## Cost (same app, same 1000 requests, single-mode Puma)
@@ -231,7 +260,6 @@ renders inside Puma's workers.
 
 ## Limitations and TODOs
 
-- Deploy overlap across containers loses telemetry (above).
 - macOS binaries unverified (above).
 - The proxy buffers whole responses (no streaming) and holds a Puma thread
   per live-channel connection's handshake, then two Ruby threads per open

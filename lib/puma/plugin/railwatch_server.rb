@@ -8,9 +8,12 @@ require "puma/plugin"
 # has drained its requests and flushed its reporter.
 #
 # The shape is the railwatch gem's own writer plugin
-# (lib/puma/plugin/railwatch.rb): `start` touches nothing of the app,
-# because a bare `puma` fires plugin starts before it loads the Rack app;
-# a background supervisor waits for after_booted. Stopping is in at_exit,
+# (lib/puma/plugin/railwatch.rb). A bare `puma` fires plugin starts before
+# it loads the Rack app, so there a background supervisor waits for
+# after_booted. Under `bin/rails server` the app is loaded first, and the
+# server is started in `start` itself, before Puma accepts a request: an
+# agent whose first delivery is refused counts it as backpressure and
+# samples fewer requests for the next second or two. Stopping is in at_exit,
 # not after_stopped: Puma fires after_stopped from its TERM trap BEFORE it
 # drains in-flight requests, and those requests' records still have to
 # reach this server.
@@ -23,6 +26,7 @@ Puma::Plugin.create do
     @booted = false
     @shutting_down = false
 
+    start_server_now if app_loaded?
     in_background { supervise }
     launcher.events.after_booted { @booted = true }
     # A hot restart (USR2) re-execs this process: the server is stopped
@@ -38,15 +42,33 @@ Puma::Plugin.create do
     defined?(::Railwatch::Server) && ::Railwatch::Server.enabled?
   end
 
-  def supervise
-    sleep POLL until @booted || @shutting_down
+  def app_loaded?
+    defined?(::Rails) && ::Rails.respond_to?(:application) && ::Rails.application&.initialized?
+  end
+
+  def start_server_now
     return unless active?
 
+    build_server
+    @server.ensure_running
+  rescue StandardError => e
+    log "Railwatch server NOT started: #{e.class}: #{e.message}"
+    @server = nil
+  end
+
+  def build_server
     ::Railwatch::Server.provision!(log: method(:log))
     @server = ::Railwatch::Server::Process.new(
       config: ::Railwatch::Server.config, data_dir: ::Railwatch::Server.data_dir,
       binary: ::Railwatch::Server::Binary.path, log: method(:log)
     )
+  end
+
+  def supervise
+    sleep 0.05 until @server || @booted || @shutting_down
+    return unless active?
+
+    build_server unless @server
     until @shutting_down
       @server.ensure_running
       sleep POLL
