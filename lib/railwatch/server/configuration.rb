@@ -18,13 +18,17 @@ module Railwatch
                     :max_live_connections, :smtp, :mail_from, :backup, :google, :retention, :alert_delivery, :server_env
 
       def initialize
-        @enabled = env_bool("RAILWATCH_SERVER_ENABLED", true)
+        # nil: on, except under Rails.env.test (a test run on a machine with
+        # a development server running would report into it). See #enabled.
+        @enabled = env_bool("RAILWATCH_SERVER_ENABLED", nil)
         # One fixed port per app, not a free one picked at boot: every process
         # of the app (Puma workers, Solid Queue, a rake task) must find the
         # server without asking, and a second Puma on the same host and data
         # dir must hit the same server (docs: two processes, one data dir).
         @port = Integer(ENV.fetch("RAILWATCH_SERVER_PORT", "28790"))
-        @data_dir = ENV.fetch("RAILWATCH_SERVER_DATA_DIR", "storage/railwatch")
+        # nil: storage/railwatch/<Rails.env>, one per environment, as Rails
+        # keeps storage/<env>.sqlite3. See #data_path.
+        @data_dir = ENV["RAILWATCH_SERVER_DATA_DIR"]
         @mount_path = ENV.fetch("RAILWATCH_SERVER_MOUNT_PATH", "/railwatch")
         # A railwatch binary of your own (another version, a platform this
         # gem has no build for). Default: the one in this platform's gem.
@@ -64,8 +68,18 @@ module Railwatch
         @server_env = {}
       end
 
+      def enabled
+        @enabled.nil? ? environment != "test" : @enabled
+      end
+
+      # The environment the server's data dir holds: Rails.env, else
+      # RAILS_ENV/RACK_ENV, else production. One per data dir.
+      def environment
+        (defined?(::Rails) && ::Rails.respond_to?(:env) ? ::Rails.env : ENV["RAILS_ENV"] || ENV["RACK_ENV"] || "production").to_s
+      end
+
       def data_path
-        path = Pathname.new(data_dir)
+        path = Pathname.new(data_dir || File.join("storage", "railwatch", environment))
         path.relative? && defined?(Rails) && Rails.root ? Rails.root.join(path) : path.expand_path
       end
 

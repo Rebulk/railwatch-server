@@ -15,6 +15,7 @@ module Railwatch
     #                    process of the app can report without asking
     #   server.log       the server's stdout and stderr
     #   server.env       the server's settings from the app (Settings, 0600)
+    #   environment      the Rails environment it holds (one per data dir)
     #
     # Provisioning runs `railwatch setup` once, before the first `serve`:
     # setup refuses a data dir that already has users, so it is idempotent by
@@ -33,6 +34,13 @@ module Railwatch
       def token_file = path.join("ingest_token")
       def log_file = path.join("server.log")
       def settings_file = path.join("server.env")
+      def environment_file = path.join("environment")
+
+      # The Rails environment this data dir was provisioned for. Data dirs
+      # provisioned before the file existed say nothing.
+      def environment
+        environment_file.read.strip if environment_file.exist?
+      end
 
       def token
         token_file.read.strip if token_file.exist?
@@ -63,6 +71,7 @@ module Railwatch
             write_secret(token_file, setup!(binary, env, app_name, env_name))
             done << "admin, account, #{app_name}/#{env_name} and its ingest token"
           end
+          File.write(environment_file, "#{env_name}\n") unless environment_file.exist?
         end
         done
       end

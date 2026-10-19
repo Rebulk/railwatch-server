@@ -44,8 +44,8 @@ end
 ```
 
 `bin/rails s`, then open `/railwatch`. On first boot the gem runs
-`railwatch setup` against `storage/railwatch`, so the account, app,
-environment, ingest token and proxy secret are created once and kept
+`railwatch setup` against `storage/railwatch/<Rails.env>`, so the account,
+app, environment, ingest token and proxy secret are created once and kept
 there. It then starts `railwatch serve` on `127.0.0.1:28790` and points the
 agent at it.
 
@@ -70,14 +70,46 @@ whether the server is up, and where the agent reports.
 
 | env | default | |
 |---|---|---|
-| `RAILWATCH_SERVER_ENABLED` | `true` | off: no server, no route, the agent untouched |
+| `RAILWATCH_SERVER_ENABLED` | on, off under `Rails.env.test` | off: no server, no route, the agent untouched |
 | `RAILWATCH_SERVER_PORT` | `28790` | loopback port. Fixed, not picked at boot, so every process of the app finds the same server |
-| `RAILWATCH_SERVER_DATA_DIR` | `storage/railwatch` | put it on the volume that survives deploys |
+| `RAILWATCH_SERVER_DATA_DIR` | `storage/railwatch/<Rails.env>` | put it on the volume that survives deploys |
 | `RAILWATCH_SERVER_MOUNT_PATH` | `/railwatch` | |
 | `RAILWATCH_SERVER_URL` | the loopback URL | public URL of the app, for links in alert emails and Secure cookies |
 | `RAILWATCH_SERVER_BINARY` | the platform gem's | your own `railwatch` |
 | `RAILWATCH_SERVER_STOP_TIMEOUT` | `15` | seconds Puma's exit waits for the server to drain |
 | `RAILWATCH_SERVER_WIRE_AGENT` | `true` | off: you configure the agent yourself |
+| `RAILWATCH_SERVER_MAX_LIVE_CONNECTIONS` | `64` | open live-update connections per app process (one per dashboard tab); past it the dashboard works without live updates |
+
+**Environments.** One environment per data dir, named after `Rails.env`:
+development, staging and production usually run on different machines,
+and each keeps its own history in `storage/railwatch/<env>`. Under
+`Rails.env.test` the server is off by default (a test run would otherwise
+report into the development server). The data dir records the environment
+it was set up for (`environment`), and an app booted in another
+environment against it refuses to wire the agent and says so, rather than
+filing staging's telemetry under production. To see several environments
+in one dashboard, run one shared self-hosted `railwatch-rs` and point each
+environment's agent at it (`RAILWATCH_INGEST_URL`, `RAILWATCH_TOKEN`).
+
+**The server's own settings** (alert and digest email, backups, Google
+sign-in, retention, whether alerts are sent) come from the app, written on
+every server start to `<data dir>/server.env` (0600) and never logged
+(the log names only what was set: "settings from the app: smtp, backup"):
+
+| server setting | from |
+|---|---|
+| SMTP | `config.smtp`, else Action Mailer's `smtp_settings` when `delivery_method` is `:smtp` |
+| From | `config.mail_from`, else `ActionMailer::Base.default[:from]` |
+| S3 backups | `config.backup`, else `credentials.railwatch_server.backup` (`endpoint bucket access_key_id secret_access_key`, optional `region prefix interval_seconds`) |
+| Google sign-in | `config.google`, else `credentials.railwatch_server.google` (`client_id client_secret`) |
+| retention | `config.retention = { detail_days:, core_days_max: }` |
+| alert delivery | `config.alert_delivery = false` records alerts without sending |
+| anything else | `config.server_env = { "RAILWATCH_NEW_ISSUES_PER_HOUR" => 50 }` |
+
+`false` or `{}` turns one off where the app would otherwise supply it. An
+incomplete backup is refused whole (logged, no backups) rather than
+half-applied. `railwatch doctor` with `RAILWATCH_ENV_FILE` pointed at the
+file shows what the server reads.
 
 The agent is wired only when the app has not configured a destination:
 when `RAILWATCH_TOKEN` is set, or the agent uses `transport :local`, it is
@@ -119,11 +151,23 @@ Puma workers, jobs ── railwatch agent ── /ingest ───────�
 - **Proxy.** `/railwatch/*` is a prepended route to
   `Railwatch::Server::ProxyController`. It forwards the server's cookies
   and Inertia headers, sets `Host`/`X-Forwarded-Proto`, adds the signed
-  header, and copies the response back. It doesn't rewrite paths: the
-  server itself serves under `/railwatch` (below). The live channel
-  (`/railwatch/cable`) is a Rack hijack spliced to the server's socket.
-  CSRF is the server's own (Origin check plus its token), so Rails' check
-  is skipped for this controller.
+  header, and streams: the response's headers go back as soon as the
+  server sends them and the body as Puma writes it (a 160 KB body
+  trickled over 8 s reached the browser after 0.01 s); request bodies
+  stream from `rack.input` (a 60 MB upload left the worker's peak RSS
+  unchanged). Encodings pass through untouched. It doesn't rewrite paths:
+  the server itself serves under `/railwatch` (below). CSRF is the
+  server's own (Origin check plus its token), so Rails' check is off for
+  this controller, and so is inertia_rails' (its middleware otherwise
+  answered every dashboard click with a 409 full reload, and its
+  `XSRF-TOKEN` at `Path=/` shadowed the server's, refusing every write).
+  Commenting, resolving, saving a view and changing a setting are tested
+  through the proxy (`test/e2e/browser_writes.rb`, and by hand in Chromium).
+- **Live channel.** `/railwatch/cable` is a Rack hijack; the browser's and
+  the server's sockets are spliced by one `IO.select` thread per app
+  process (`Relay`), not two threads per socket: 30 open dashboards cost
+  one thread. At most `max_live_connections` per process; past it the
+  handshake gets 503 and the dashboard falls back to reloading.
 - **Trust.** `storage/railwatch/proxy_secret` (0600, generated) is the
   HMAC key. The header is `v1.<claims>.<HMAC-SHA256>` with
   `email, name, role, exp`; the server refuses a bad signature, an expired
@@ -187,14 +231,18 @@ Builds use the pinned `cargo-zigbuild` image from `bin/release`: static musl
 for Linux, and that image's MacOSX 11.3 SDK for both darwin targets. All
 four built here (2-3 min each, 4 jobs).
 
-**macOS: built, not run.** The darwin binaries cross-link (Mach-O,
-x86_64/arm64) but were never executed, and they're unsigned. Apple Silicon
-runs ad-hoc-signed binaries only, so expect `Killed: 9` until signed
-(`codesign -s -` in the gem build would do for a local gem). A Gatekeeper
-quarantine flag doesn't apply to files RubyGems extracts. Before shipping:
-a macOS GitHub runner job that runs `railwatch version` and the
-`trusted_proxy` test on each arch, ad-hoc or Developer ID signing, and a
-check that the 11.3 SDK floor is fine.
+**macOS: built natively, signed ad hoc, run in CI.** `.github/workflows/macos.yml`
+builds the frontend once on Linux, then on `macos-14` (arm64) and
+`macos-15-intel` (x86_64; GitHub retired the macos-13 runners) builds the
+server with rust-patches applied (`MACOSX_DEPLOYMENT_TARGET=11.0`, checked
+with `vtool`: minos 11.0), signs it `codesign -s -`, verifies the
+signature and the arch, and runs it: `--version`, `setup` in a temp dir,
+`serve`, `/up` and `/ingest/ping`, then a second `serve` on the same data
+dir that comes up as a standby and takes over when the first gets TERM.
+Then it builds the darwin platform gem, installs it, checks the installed
+binary's signature and runs it. Artifacts: the binary and the `.gem` per
+arch. The zigbuild cross-build in `script/build-server` still works for
+Linux; for darwin, use the workflow's artifacts (they are signed).
 
 ## Deploys and two processes
 
@@ -260,26 +308,19 @@ renders inside Puma's workers.
 
 ## Limitations and TODOs
 
-- macOS binaries unverified (above).
-- The proxy buffers whole responses (no streaming) and holds a Puma thread
-  per live-channel connection's handshake, then two Ruby threads per open
-  websocket. Fine for a few dashboard users; Thruster/nginx in front won't
-  help with the threads.
-- Uploads (source maps through `/railwatch/...`) are buffered in memory.
-- Not exercised end to end: writes through the proxy from a browser
-  (saving a view, changing an issue). The Rust test shows CSRF is still
-  enforced with the proxy header, and the proxy forwards the XSRF cookie
-  and header, but nobody clicked a form.
-- One environment per app (the one `setup` created, named after
-  `Rails.env`). Staging and production on one data dir would need
-  `railwatch env create`.
+- A slow dashboard response holds a Puma thread for as long as it
+  streams (as any Rails response does). Live-channel sockets do not.
+- macOS binaries are ad-hoc signed only: fine for a gem installed with
+  Bundler (RubyGems sets no quarantine flag). A notarized release needs an
+  Apple Developer ID certificate in CI (`codesign -s "Developer ID
+  Application: ..." --options runtime --timestamp`, then `notarytool
+  submit --wait`); a bare executable can't be stapled, so Gatekeeper checks
+  it online the first time it runs from a quarantined download.
+- One environment per data dir (above).
 - The account owner is a placeholder user with a random password nobody
   knows; the proxied users are admins/members. Transferring ownership
   works in Settings > Members.
-- Alerts, SMTP, Google sign-in, backups: configure them the self-hosted
-  way (`RAILWATCH_*` in the server's environment); this gem does not pass
-  them through yet.
-- The rust patch needs upstreaming (or a fork) before this gem can ship;
+- The rust patches need upstreaming (or a fork) before this gem can ship;
   the platform gems must be built from published source (AGPL section 6).
 - Name: temporary.
 

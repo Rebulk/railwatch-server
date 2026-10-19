@@ -55,7 +55,7 @@ module Railwatch
         return dir if dir.provisioned?
 
         app = defined?(Rails) && Rails.application ? Rails.application.class.module_parent_name : "App"
-        env = defined?(Rails) ? Rails.env.to_s : "production"
+        env = config.environment
         # setup needs none of the app's settings (server.env is written at
         # the first start, after this).
         server_env = Process.new(config: config, data_dir: dir, binary: Binary.path, log: log).env.merge("RAILWATCH_ENV_FILE" => File::NULL)
@@ -70,7 +70,14 @@ module Railwatch
         return :disabled unless enabled? && config.wire_agent
         return :configured_elsewhere if agent_configured_elsewhere?
 
-        token = provision!.token
+        dir = provision!
+        held = dir.environment
+        if held && held != config.environment
+          raise Error, "#{dir.path} holds the #{held} environment, and this is #{config.environment}: the agent is not wired, " \
+                       "so #{config.environment}'s telemetry does not land in #{held}'s. One data dir per environment: " \
+                       "unset RAILWATCH_SERVER_DATA_DIR (the default is storage/railwatch/<env>) or point it elsewhere"
+        end
+        token = dir.token
         Railwatch.config.token = token
         Railwatch.config.ingest_url = config.local_url
         :wired
