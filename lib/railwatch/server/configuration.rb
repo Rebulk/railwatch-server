@@ -16,7 +16,7 @@ module Railwatch
     class Configuration
       attr_accessor :enabled, :port, :data_dir, :mount_path, :binary, :url, :stop_timeout, :user, :wire_agent,
                     :max_live_connections, :max_proxied_requests, :proxy_connect_timeout, :proxy_first_byte_timeout,
-                    :proxy_idle_timeout, :smtp, :mail_from, :backup, :google, :retention, :alert_delivery, :server_env
+                    :proxy_idle_timeout, :nice, :smtp, :mail_from, :backup, :google, :retention, :alert_delivery, :server_env
 
       def initialize
         # nil: on, except under Rails.env.test (a test run on a machine with
@@ -60,9 +60,16 @@ module Railwatch
         # its own connection cap), for it to start answering a dashboard
         # request (504 past it; the slowest page at 30 days takes seconds),
         # and for a response that has started to move again (cut off past it).
+        # The first-byte timeout is under the 30 s after which Thruster and
+        # kamal-proxy drop a response that has not started: past theirs the
+        # visitor gets an empty reply, under it this proxy's 504 that says why.
         @proxy_connect_timeout = Float(ENV.fetch("RAILWATCH_SERVER_PROXY_CONNECT_TIMEOUT", "2"))
-        @proxy_first_byte_timeout = Float(ENV.fetch("RAILWATCH_SERVER_PROXY_FIRST_BYTE_TIMEOUT", "120"))
+        @proxy_first_byte_timeout = Float(ENV.fetch("RAILWATCH_SERVER_PROXY_FIRST_BYTE_TIMEOUT", "25"))
         @proxy_idle_timeout = Float(ENV.fetch("RAILWATCH_SERVER_PROXY_IDLE_TIMEOUT", "60"))
+        # How much lower than the app's the server's CPU priority is (nice
+        # increment, 0-19; 0 keeps the app's). The server can keep every core
+        # busy rendering dashboards; at 10 the app's requests come first.
+        @nice = Integer(ENV.fetch("RAILWATCH_SERVER_NICE", "10"))
         # The server's own settings (Settings): nil means "from the app"
         # (Action Mailer's SMTP and From, credentials.railwatch_server's
         # backup and google), false/{} turns one off.
