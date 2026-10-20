@@ -40,6 +40,10 @@ module Railwatch
         case Railwatch::Server.wire_agent!
         when :wired
           Rails.logger.info("[railwatch-server] the railwatch agent reports to #{Railwatch::Server.config.local_url}")
+        when :not_provisioned
+          Rails.logger.warn("[railwatch-server] #{Railwatch::Server.data_dir.path} is not provisioned yet, so this process's agent is not wired: " \
+                            "the server's process creates it the first time it starts (Puma with `plugin :railwatch_server`, or " \
+                            "railwatch_server:start); this process reports once it restarts after that")
         when :configured_elsewhere
           Rails.logger.info("[railwatch-server] the railwatch agent is configured elsewhere (RAILWATCH_TOKEN or transport :local); " \
                             "the bundled server only serves the dashboard")

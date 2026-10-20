@@ -19,9 +19,21 @@ module Railwatch
     # finds the record, sees the parent gone, and stops the orphan first.
     # Only on the same host name: the data dir may be a volume shared with
     # another container, whose pids mean other processes here.
+    #
+    # Alive is not enough: a stopped or wedged server records nothing and
+    # holds every dashboard request until the proxy gives up. Each poll asks
+    # its /up (PROBE_TIMEOUT); one that has not answered for HANG_TIMEOUT
+    # is KILLed and restarted with the backoff. One that never answered
+    # since it was started gets STARTUP_TIMEOUT (it may be migrating).
     class Process
       BACKOFF = [ 1, 2, 4, 8, 15, 30 ].freeze
-      READY_TIMEOUT = 15
+      # How long a start waits for /up. Under `bin/rails server` that is
+      # before Puma listens, so it is boot time: a healthy server answers in
+      # ~100 ms, and one that doesn't is left to the supervisor.
+      READY_TIMEOUT = 5
+      PROBE_TIMEOUT = 2
+      HANG_TIMEOUT = 8
+      STARTUP_TIMEOUT = 60
 
       attr_reader :pid
 
@@ -79,18 +91,11 @@ module Railwatch
       # backoff has passed. Loud when it had died.
       def ensure_running
         if alive?
-          took_over if @standby
+          @standby ? took_over : check_health
           return
         end
 
-        if @pid
-          @failures += 1
-          delay = BACKOFF[[ @failures - 1, BACKOFF.size - 1 ].min]
-          @log.call("Railwatch server (pid #{@pid}) DIED; restarting in #{delay}s (failure #{@failures}). " \
-                    "Last lines of #{@data_dir.log_file}:\n#{tail_log}")
-          @pid = nil
-          @next_start_at = monotonic + delay
-        end
+        failed("DIED") if @pid
         return if monotonic < @next_start_at
 
         start
@@ -107,8 +112,11 @@ module Railwatch
         log = File.open(@data_dir.log_file, "a")
         @log_offset_at_spawn = log.size
         @relay_log_offset = nil
+        @answered = false
+        @unanswered_since = nil
         @pid = ::Process.spawn(env, @binary, "serve", chdir: @data_dir.path.to_s, in: File::NULL, out: log, err: log, pgroup: true)
         log.close
+        renice
         if @standby
           @log.call("Railwatch server (pid #{@pid}) on standby: another server already answers on 127.0.0.1:#{@config.port} " \
                     "and owns #{@data_dir.path}; this one waits for its serve.lock and takes over when it exits. " \
@@ -126,11 +134,16 @@ module Railwatch
                                "this one relays to it through serve.sock and takes over when it exits" :
                                "Railwatch server ready in #{((monotonic - started) * 1000).round} ms; dashboard at #{@config.normalized_mount_path}")
           @failures = 0
+          answered
         elsif alive?
-          waiting = File.read(@data_dir.log_file).lines.last(5).grep(/waiting for .*serve\.lock/).any?
-          @log.call(waiting ? "Railwatch server (pid #{@pid}) is waiting for #{@data_dir.path}/serve.lock: another server owns this " \
-                              "data dir and keeps serving; this one takes over when it exits" :
-                              "Railwatch server (pid #{@pid}) not answering /up after #{READY_TIMEOUT}s; see #{@data_dir.log_file}")
+          if waiting_for_lock?
+            @log.call("Railwatch server (pid #{@pid}) is waiting for #{@data_dir.path}/serve.lock: another server owns this " \
+                      "data dir and keeps serving; this one takes over when it exits")
+          else
+            @unanswered_since = started
+            @log.call("Railwatch server (pid #{@pid}) not answering /up after #{READY_TIMEOUT}s; not waiting longer for it. " \
+                      "Killed and restarted if it has not answered #{STARTUP_TIMEOUT}s after starting; see #{@data_dir.log_file}")
+          end
         end
       rescue SystemCallError => e
         @pid = nil
@@ -163,9 +176,73 @@ module Railwatch
 
       private
 
-      def up?
-        Net::HTTP.get_response(URI("#{@config.local_url}/up")).is_a?(Net::HTTPSuccess)
+      def up?(timeout: PROBE_TIMEOUT)
+        Net::HTTP.start("127.0.0.1", @config.port, open_timeout: timeout, read_timeout: timeout) do |http|
+          http.get("/up").is_a?(Net::HTTPSuccess)
+        end
       rescue SystemCallError, IOError, Net::OpenTimeout, Net::ReadTimeout
+        false
+      end
+
+      # Logged when it stops answering and when it answers again, once each.
+      def check_health
+        asked_at = monotonic
+        if up?
+          @log.call("Railwatch server (pid #{@pid}) answering /up again after #{(monotonic - @unanswered_since).round}s") if @unanswered_since && @answered
+          answered unless @answered
+          @unanswered_since = nil
+          return
+        end
+        return if !@answered && waiting_for_lock?
+
+        limit = @answered ? HANG_TIMEOUT : STARTUP_TIMEOUT
+        unless @unanswered_since
+          @unanswered_since = asked_at
+          @log.call("Railwatch server (pid #{@pid}) is running but NOT ANSWERING /up within #{PROBE_TIMEOUT}s; " \
+                    "telemetry is not being recorded. Killed and restarted if it stays silent for #{limit}s")
+        end
+        silent = monotonic - @unanswered_since
+        return if silent < limit
+
+        ::Process.kill(:KILL, @pid)
+        reaped_within?(1)
+        failed("HUNG (alive, no answer on /up for #{silent.round}s); KILLED it")
+      rescue Errno::ESRCH, Errno::ECHILD
+        nil
+      end
+
+      def failed(what)
+        @failures += 1
+        delay = BACKOFF[[ @failures - 1, BACKOFF.size - 1 ].min]
+        @log.call("Railwatch server (pid #{@pid}) #{what}; restarting in #{delay}s (failure #{@failures}). " \
+                  "Last lines of #{@data_dir.log_file}:\n#{tail_log}")
+        @pid = nil
+        @next_start_at = monotonic + delay
+      end
+
+      def answered
+        @answered = true
+        renice
+      end
+
+      # Below the app's own priority (RAILWATCH_SERVER_NICE), so a busy
+      # dashboard, which can keep every core busy, takes CPU from the app's
+      # requests last. Linux keeps a priority per thread: set on the child's
+      # process group (every thread in it) right after the spawn, and again
+      # once it answers, for any thread started in between; later threads
+      # inherit it.
+      def renice
+        return if @config.nice.zero?
+
+        ::Process.setpriority(::Process::PRIO_PGRP, @pid, [ ::Process.getpriority(::Process::PRIO_PROCESS, 0) + @config.nice, 19 ].min)
+      rescue SystemCallError => e
+        @log.call("Railwatch server (pid #{@pid}) runs at the app's priority: nice +#{@config.nice} failed (#{e.message})")
+      end
+
+      def waiting_for_lock?
+        lines = File.open(@data_dir.log_file) { |f| f.seek(@log_offset_at_spawn || 0); f.read(64 * 1024) }.to_s.lines
+        lines.grep(/waiting for .*serve\.lock/).any? && lines.grep(/serve\.lock acquired after/).none?
+      rescue SystemCallError
         false
       end
 
@@ -223,14 +300,10 @@ module Railwatch
       end
 
       def wait_until_ready(started)
-        uri = URI("#{@config.local_url}/up")
-        while monotonic - started < READY_TIMEOUT
+        while (left = READY_TIMEOUT - (monotonic - started)) > 0
           return false unless alive?
-          begin
-            return true if Net::HTTP.get_response(uri).is_a?(Net::HTTPSuccess)
-          rescue SystemCallError, IOError, Net::OpenTimeout, Net::ReadTimeout
-            nil
-          end
+          return true if up?(timeout: [ left, PROBE_TIMEOUT ].min)
+
           sleep 0.1
         end
         false

@@ -49,6 +49,14 @@ app, environment, ingest token and proxy secret are created once and kept
 there. It then starts `railwatch serve` on `127.0.0.1:28790` and points the
 agent at it.
 
+Only a process that starts the server creates that directory: Puma with the
+plugin (`bin/rails server` or `puma`) and `bin/rails railwatch_server:start`.
+Anything else (`assets:precompile` in a Dockerfile, a console, a Solid Queue
+worker) reads it and, until it exists, leaves the agent alone and says so.
+So an image build ships no token, proxy secret or `secret_key_base`; each
+volume gets its own on first start. A job worker started before the first
+server reports from its next restart.
+
 Bundler picks the platform gem with the binary for your machine:
 x86_64-linux, aarch64-linux, x86_64-darwin or arm64-darwin. On anything
 else the plain gem installs and tells you to set `RAILWATCH_SERVER_BINARY`
@@ -81,8 +89,9 @@ whether the server is up, and where the agent reports.
 | `RAILWATCH_SERVER_MAX_LIVE_CONNECTIONS` | `64` | open live-update connections per app process (one per dashboard tab); past it the dashboard works without live updates |
 | `RAILWATCH_SERVER_MAX_PROXIED_REQUESTS` | `64` | dashboard requests in flight per app process (waiting on the server or streaming back); past it a dashboard request gets 503 with `Retry-After: 1` at once. The app's own requests are never affected |
 | `RAILWATCH_SERVER_PROXY_CONNECT_TIMEOUT` | `2` | seconds to connect to the server on loopback; past it, 503 |
-| `RAILWATCH_SERVER_PROXY_FIRST_BYTE_TIMEOUT` | `120` | seconds for the server to start answering a dashboard request; past it, 504 |
+| `RAILWATCH_SERVER_PROXY_FIRST_BYTE_TIMEOUT` | `25` | seconds for the server to start answering a dashboard request; past it, 504 with a message. Under 30 s on purpose: Thruster (its write timeout) and kamal-proxy drop a response that hasn't started after 30 s, and the visitor gets an empty reply instead |
 | `RAILWATCH_SERVER_PROXY_IDLE_TIMEOUT` | `60` | seconds a response that has started may go without a byte moving; past it the connection is closed |
+| `RAILWATCH_SERVER_NICE` | `10` | how far below the app's CPU priority the server runs (0-19; 0: the same). A busy dashboard can keep every core busy; measured in a 2-CPU container under 30 dashboard clients at the app's priority, the app's `/up` p50 went from 2 to 15 ms |
 
 **Environments.** One environment per data dir, named after `Rails.env`:
 development, staging and production usually run on different machines,
@@ -147,7 +156,13 @@ Puma workers, jobs ── railwatch agent ── /ingest ───────�
   Puma, Puma drains, and only then is the server stopped. A supervisor
   thread checks every second and restarts a dead server with backoff
   (1, 2, 4, 8, 15, 30 s), logging the death and the last lines of
-  `storage/railwatch/server.log`. On stop: the railwatch agent's samplers
+  `storage/railwatch/server.log`. Each check also asks the server's `/up`
+  (2 s timeout): one that is alive but stops answering (stopped, wedged)
+  is logged once as NOT ANSWERING, and after 8 s more of silence is
+  KILLed and restarted the same way (measured: a SIGSTOPped server was
+  replaced and answering in 11 s). At boot Puma waits at most 5 s for a
+  new server's `/up`, then boots without it and says so; a server that
+  hasn't answered once within 60 s of starting is killed and restarted. On stop: the railwatch agent's samplers
   stop, the reporter flushes into the still-running server, then the
   server gets SIGTERM (finishes in-flight requests, commits queued writes)
   and KILL past the deadline. `server.pid` records "server parent"; a
