@@ -133,7 +133,6 @@ module Railwatch
                                "as a standby: another app process (the old container of a deploy) holds #{@data_dir.path}/serve.lock; " \
                                "this one relays to it through serve.sock and takes over when it exits" :
                                "Railwatch server ready in #{((monotonic - started) * 1000).round} ms; dashboard at #{@config.normalized_mount_path}")
-          @failures = 0
           answered
         elsif alive?
           if waiting_for_lock?
@@ -180,7 +179,9 @@ module Railwatch
         Net::HTTP.start("127.0.0.1", @config.port, open_timeout: timeout, read_timeout: timeout) do |http|
           http.get("/up").is_a?(Net::HTTPSuccess)
         end
-      rescue SystemCallError, IOError, Net::OpenTimeout, Net::ReadTimeout
+      rescue SystemCallError, IOError, Timeout::Error, Net::ProtocolError, Net::HTTPBadResponse
+        # A wedged server (or something else on the port) may answer garbage:
+        # not answering, not a reason for the supervisor to stop.
         false
       end
 
@@ -222,6 +223,7 @@ module Railwatch
 
       def answered
         @answered = true
+        @failures = 0
         renice
       end
 

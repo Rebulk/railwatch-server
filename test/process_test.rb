@@ -82,6 +82,15 @@ class ProcessTest < Minitest::Test
     assert_equal 1, @lines.grep(/answering \/up again/).size
   end
 
+  def test_a_garbled_answer_on_up_counts_as_not_answering
+    garbage = TCPServer.new("127.0.0.1", @config.port)
+    answering = Thread.new { loop { c = garbage.accept; c.readpartial(4096); c.write("garbage\r\n\r\n"); c.close } }
+    refute @server.send(:up?)
+  ensure
+    answering&.kill&.join
+    garbage&.close
+  end
+
   def test_the_server_runs_below_the_apps_priority
     skip "no /proc" unless File.exist?("/proc/self/stat")
 
