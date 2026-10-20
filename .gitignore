@@ -1,4 +1,6 @@
 # Built by script/build-server; ~20 MB each, attached to releases, not committed.
+# The trial branch commits the x86_64-linux one so apps can try the gem from git.
 /exe/*/railwatch
+!/exe/x86_64-linux/railwatch
 /pkg/
 /Gemfile.lock
