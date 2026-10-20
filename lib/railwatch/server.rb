@@ -49,8 +49,35 @@ module Railwatch
         Railwatch.config.token.to_s.strip != ""
       end
 
-      # Once per data dir, before anything needs the token: `railwatch setup`
+      # Whether this process starts the server, the only kind that may create
+      # the data dir: Puma with `plugin :railwatch_server` (its master and
+      # workers; under a bare `puma` the plugin is loaded before the app),
+      # `bin/rails server` (which loads the app before Puma reads its config),
+      # and `bin/rails railwatch_server:start`. Every other process (a job
+      # worker, a console, `assets:precompile` in a Dockerfile) only reads
+      # what the server's process wrote: provisioning in an asset build put
+      # the token and the dashboard's HMAC key in the image, shared by every
+      # volume made from it.
+      def serving?
+        return true if defined?(::Rails::Server)
+        return true if $LOADED_FEATURES.any? { _1.end_with?("/puma/plugin/railwatch_server.rb") }
+
+        rake_tasks.include?("railwatch_server:start")
+      end
+
+      # An image build (`SECRET_KEY_BASE_DUMMY=1 bin/rails assets:precompile`),
+      # where an unprovisioned data dir is expected and not worth a warning.
+      def building?
+        ENV["SECRET_KEY_BASE_DUMMY"].to_s.strip != "" || rake_tasks.any? { _1.start_with?("assets:") }
+      end
+
+      def rake_tasks
+        defined?(::Rake.application) ? ::Rake.application.top_level_tasks : []
+      end
+
+      # Once per data dir, before the first server starts: `railwatch setup`
       # and the proxy secret. Cheap after the first time (two files exist).
+      # Only from a process that starts the server (serving?).
       def provision!(log: ->(m) { warn("[railwatch-server] #{m}") })
         dir = data_dir
         return dir if dir.provisioned?
@@ -71,7 +98,9 @@ module Railwatch
         return :disabled unless enabled? && config.wire_agent
         return :configured_elsewhere if agent_configured_elsewhere?
 
-        dir = provision!
+        dir = serving? ? provision! : data_dir
+        return building? ? :building : :not_provisioned unless dir.provisioned?
+
         held = dir.environment
         if held && held != config.environment
           raise Error, "#{dir.path} holds the #{held} environment, and this is #{config.environment}: the agent is not wired, " \
