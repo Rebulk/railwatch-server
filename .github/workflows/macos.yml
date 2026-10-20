@@ -24,7 +24,7 @@ permissions:
   contents: read
 
 env:
-  RAILWATCH_RS_SHA: ef87f728ddba2e30bb0b6be3b3fed169773c4147  # main with base path, proxy auth, standby relay (#16)
+  RAILWATCH_RS_SHA: 3a09c4963a62cba49b671947132ef1e2f7fc5a74  # main with base path, proxy auth, standby relay (#16)
   RUST_TOOLCHAIN: 1.99.1
   CARGO_BUILD_JOBS: "4"
 
