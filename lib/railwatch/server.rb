@@ -66,9 +66,13 @@ module Railwatch
       end
 
       # An image build (`SECRET_KEY_BASE_DUMMY=1 bin/rails assets:precompile`),
-      # where an unprovisioned data dir is expected and not worth a warning.
+      # or the database step a container runs before its server (Rails'
+      # docker-entrypoint: `bin/rails db:prepare`, then `rails server`, which
+      # provisions), where an unprovisioned data dir is expected and not
+      # worth a warning: on a fresh volume it was logged right before the
+      # server's process provisioned it.
       def building?
-        ENV["SECRET_KEY_BASE_DUMMY"].to_s.strip != "" || rake_tasks.any? { _1.start_with?("assets:") }
+        ENV["SECRET_KEY_BASE_DUMMY"].to_s.strip != "" || rake_tasks.any? { _1.start_with?("assets:", "db:") }
       end
 
       def rake_tasks

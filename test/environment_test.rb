@@ -2,6 +2,7 @@
 
 require "minitest/autorun"
 require "tmpdir"
+require "rake"
 require "active_support/core_ext/securerandom"
 require "active_support/core_ext/object/blank"
 require "railwatch/server"
@@ -48,6 +49,27 @@ class EnvironmentTest < Minitest::Test
         with_env("SECRET_KEY_BASE_DUMMY" => nil) { assert_equal :not_provisioned, Railwatch::Server.wire_agent! }
         refute File.exist?(File.join(dir, "storage"))
       ensure
+        Railwatch::Server.instance_variable_set(:@config, nil)
+      end
+    end
+  end
+
+  # A container's entrypoint runs `bin/rails db:prepare` before `rails
+  # server` provisions the fresh volume: no warning from it. A job worker
+  # still says its agent is not wired.
+  def test_the_database_step_before_the_first_server_does_not_warn_and_a_job_worker_does
+    Dir.mktmpdir do |dir|
+      with_env("RAILS_ENV" => "production", "RAILWATCH_SERVER_DATA_DIR" => File.join(dir, "railwatch"), "SECRET_KEY_BASE_DUMMY" => nil,
+               "RAILWATCH_SERVER_ENABLED" => nil) do
+        Railwatch::Server.instance_variable_set(:@config, nil)
+        saved = Rake.application.top_level_tasks.dup
+        Rake.application.top_level_tasks.replace(%w[db:prepare])
+        assert_equal :building, Railwatch::Server.wire_agent!
+        Rake.application.top_level_tasks.replace(%w[solid_queue:start])
+        assert_equal :not_provisioned, Railwatch::Server.wire_agent!
+        refute File.exist?(File.join(dir, "railwatch"))
+      ensure
+        Rake.application.top_level_tasks.replace(saved) if saved
         Railwatch::Server.instance_variable_set(:@config, nil)
       end
     end
