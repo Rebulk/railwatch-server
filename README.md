@@ -93,7 +93,7 @@ whether the server is up, and where the agent reports.
 | `RAILWATCH_SERVER_PROXY_CONNECT_TIMEOUT` | `2` | seconds to connect to the server on loopback; past it, 503 |
 | `RAILWATCH_SERVER_PROXY_FIRST_BYTE_TIMEOUT` | `25` | seconds for the server to start answering a dashboard request; past it, 504 with a message. Under 30 s on purpose: Thruster (its write timeout) and kamal-proxy drop a response that hasn't started after 30 s, and the visitor gets an empty reply instead |
 | `RAILWATCH_SERVER_PROXY_IDLE_TIMEOUT` | `60` | seconds a response that has started may go without a byte moving; past it the connection is closed |
-| `RAILWATCH_SERVER_NICE` | `10` | how far below the app's CPU priority the server runs (0-19; 0: the same). A busy dashboard can keep every core busy; measured in a 2-CPU container under 30 dashboard clients at the app's priority, the app's `/up` p50 went from 2 to 15 ms |
+| `RAILWATCH_SERVER_NICE` | `10` | how far below the app's CPU priority the server runs (0-19; 0: the same). A busy dashboard can keep every core busy; measured in a 2-CPU container under 30 dashboard clients at the app's priority, the app's `/up` p50 went from 2 to 15 ms. Not under a CPU quota (`docker --cpus`, Kubernetes CPU limits): the kernel throttles the container's processes together whatever their priority, and in that 2-CPU container under `--cpus 2` nice 10 measured no better than nice 0 (`/up` p99 190-580 ms at either); on 2 dedicated cores (`--cpuset-cpus`) it took `/up` p99 from 207-363 ms to 18-22 ms. In a quota-limited container give it real cores (a cpuset, or a VM) or keep dashboard use light |
 
 **Environments.** One environment per data dir, named after `Rails.env`:
 development, staging and production usually run on different machines,
