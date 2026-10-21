@@ -125,6 +125,10 @@ module Railwatch
       def protect_against_forgery? = false
 
       def forward
+        if (error = Railwatch::Server.provision_error) && !Railwatch::Server.data_dir.provisioned?
+          return unavailable("not provisioned: #{error.message}")
+        end
+
         secret = Railwatch::Server.data_dir.proxy_secret
         return unavailable("not provisioned yet (no #{Railwatch::Server.data_dir.proxy_secret_file})") unless secret
 
@@ -175,6 +179,11 @@ module Railwatch
         # Inertia version-mismatch reload) from Host and X-Forwarded-Proto.
         headers["Host"] = request.host_with_port
         headers["X-Forwarded-Proto"] = request.scheme
+        # The visitor, as the app sees it (RemoteIp: the proxies in front of
+        # the app are trusted, the browser's own X-Forwarded-For is not),
+        # and only that: the server (RAILWATCH_TRUST_PROXY) keys its per-IP
+        # limits on the last address here.
+        headers["X-Forwarded-For"] = request.remote_ip
         headers[ProxyAuth::HEADER] = signed_header(secret)
         headers
       end
@@ -248,7 +257,7 @@ module Railwatch
         upstream = Upstream.new(request, upstream_headers(secret), port: Railwatch::Server.config.port)
         response = upstream.start
         response.each_header do |name, _|
-          next if HOP_BY_HOP.include?(name)
+          next if HOP_BY_HOP.include?(name) || Relay::APP_OWNED.include?(name)
 
           values = response.get_fields(name)
           self.response.headers[name] = name == "set-cookie" ? values : values.join(", ")
