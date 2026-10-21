@@ -171,7 +171,10 @@ Puma workers, jobs ── railwatch agent ── /ingest ───────�
   server orphaned by a SIGKILLed Puma is stopped by the next start.
 - **Proxy.** `/railwatch/*` is a prepended route to
   `Railwatch::Server::ProxyController`. It forwards the server's cookies
-  and Inertia headers, sets `Host`/`X-Forwarded-Proto`, adds the signed
+  and Inertia headers, sets `Host`/`X-Forwarded-Proto`, sets
+  `X-Forwarded-For` to the visitor's `request.remote_ip` (replacing any the
+  browser sent; the server runs with `RAILWATCH_TRUST_PROXY`, so its per-IP
+  sign-in and MCP limits count visitors, not the app), adds the signed
   header, and hands the request off: **no Puma thread waits for the
   server.** Past the gate the controller connects to the server and leaves
   the request to `ProxyHandoff`, a middleware outside every other one,
