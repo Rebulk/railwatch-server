@@ -125,6 +125,10 @@ module Railwatch
       def protect_against_forgery? = false
 
       def forward
+        if (error = Railwatch::Server.provision_error) && !Railwatch::Server.data_dir.provisioned?
+          return unavailable("not provisioned: #{error.message}")
+        end
+
         secret = Railwatch::Server.data_dir.proxy_secret
         return unavailable("not provisioned yet (no #{Railwatch::Server.data_dir.proxy_secret_file})") unless secret
 

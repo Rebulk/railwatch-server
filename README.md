@@ -55,7 +55,8 @@ Anything else (`assets:precompile` in a Dockerfile, a console, a Solid Queue
 worker) reads it and, until it exists, leaves the agent alone and says so.
 So an image build ships no token, proxy secret or `secret_key_base`; each
 volume gets its own on first start. A job worker started before the first
-server reports from its next restart.
+server reports from its next restart. A `railwatch setup` that hangs never
+holds up the boot past `RAILWATCH_SERVER_SETUP_TIMEOUT` (below).
 
 Bundler picks the platform gem with the binary for your machine:
 x86_64-linux, aarch64-linux, x86_64-darwin or arm64-darwin. On anything
@@ -85,6 +86,7 @@ whether the server is up, and where the agent reports.
 | `RAILWATCH_SERVER_URL` | the loopback URL | public URL of the app, for links in alert emails and Secure cookies |
 | `RAILWATCH_SERVER_BINARY` | the platform gem's | your own `railwatch` |
 | `RAILWATCH_SERVER_STOP_TIMEOUT` | `15` | seconds Puma's exit waits for the server to drain |
+| `RAILWATCH_SERVER_SETUP_TIMEOUT` | `30` | seconds the first start of a data dir waits for `railwatch setup` (about a second), before Puma listens. Past it the setup is KILLed, the app boots without the server (agent not wired, the dashboard's 503 says why) and the next start retries |
 | `RAILWATCH_SERVER_WIRE_AGENT` | `true` | off: you configure the agent yourself |
 | `RAILWATCH_SERVER_MAX_LIVE_CONNECTIONS` | `64` | open live-update connections per app process (one per dashboard tab); past it the dashboard works without live updates |
 | `RAILWATCH_SERVER_MAX_PROXIED_REQUESTS` | `64` | dashboard requests in flight per app process (waiting on the server or streaming back); past it a dashboard request gets 503 with `Retry-After: 1` at once. The app's own requests are never affected |

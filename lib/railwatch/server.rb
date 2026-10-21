@@ -75,21 +75,34 @@ module Railwatch
         defined?(::Rake.application) ? ::Rake.application.top_level_tasks : []
       end
 
+      # Why this process could not provision the data dir (the dashboard
+      # says so), or nil.
+      attr_reader :provision_error
+
       # Once per data dir, before the first server starts: `railwatch setup`
       # and the proxy secret. Cheap after the first time (two files exist).
       # Only from a process that starts the server (serving?).
+      #
+      # Tried once per process: under `bin/rails server` the Railtie and then
+      # the Puma plugin both get here before Puma listens, and a setup that
+      # failed or hit setup_timeout must not hold up the boot twice. The next
+      # start tries again.
       def provision!(log: ->(m) { warn("[railwatch-server] #{m}") })
         dir = data_dir
         return dir if dir.provisioned?
+        raise @provision_error if @provision_error
 
         app = defined?(Rails) && Rails.application ? Rails.application.class.module_parent_name : "App"
         env = config.environment
         # setup needs none of the app's settings (server.env is written at
         # the first start, after this).
         server_env = Process.new(config: config, data_dir: dir, binary: Binary.path, log: log).env.merge("RAILWATCH_ENV_FILE" => File::NULL)
-        done = dir.provision!(binary: Binary.path, env: server_env, app_name: app, env_name: env)
+        done = dir.provision!(binary: Binary.path, env: server_env, app_name: app, env_name: env, timeout: config.setup_timeout)
         log.call("provisioned #{dir.path}: #{done.join(', ')}") if done.any?
         dir
+      rescue Error => e
+        @provision_error = e
+        raise
       end
 
       # The railwatch agent's settings for the bundled server. Called from
