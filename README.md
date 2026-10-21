@@ -55,7 +55,8 @@ Anything else (`assets:precompile` in a Dockerfile, a console, a Solid Queue
 worker) reads it and, until it exists, leaves the agent alone and says so.
 So an image build ships no token, proxy secret or `secret_key_base`; each
 volume gets its own on first start. A job worker started before the first
-server reports from its next restart.
+server reports from its next restart. A `railwatch setup` that hangs never
+holds up the boot past `RAILWATCH_SERVER_SETUP_TIMEOUT` (below).
 
 Bundler picks the platform gem with the binary for your machine:
 x86_64-linux, aarch64-linux, x86_64-darwin or arm64-darwin. On anything
@@ -85,13 +86,14 @@ whether the server is up, and where the agent reports.
 | `RAILWATCH_SERVER_URL` | the loopback URL | public URL of the app, for links in alert emails and Secure cookies |
 | `RAILWATCH_SERVER_BINARY` | the platform gem's | your own `railwatch` |
 | `RAILWATCH_SERVER_STOP_TIMEOUT` | `15` | seconds Puma's exit waits for the server to drain |
+| `RAILWATCH_SERVER_SETUP_TIMEOUT` | `30` | seconds the first start of a data dir waits for `railwatch setup` (about a second), before Puma listens. Past it the setup is KILLed, the app boots without the server (agent not wired, the dashboard's 503 says why) and the next start retries |
 | `RAILWATCH_SERVER_WIRE_AGENT` | `true` | off: you configure the agent yourself |
 | `RAILWATCH_SERVER_MAX_LIVE_CONNECTIONS` | `64` | open live-update connections per app process (one per dashboard tab); past it the dashboard works without live updates |
 | `RAILWATCH_SERVER_MAX_PROXIED_REQUESTS` | `64` | dashboard requests in flight per app process (waiting on the server or streaming back); past it a dashboard request gets 503 with `Retry-After: 1` at once. The app's own requests are never affected |
 | `RAILWATCH_SERVER_PROXY_CONNECT_TIMEOUT` | `2` | seconds to connect to the server on loopback; past it, 503 |
 | `RAILWATCH_SERVER_PROXY_FIRST_BYTE_TIMEOUT` | `25` | seconds for the server to start answering a dashboard request; past it, 504 with a message. Under 30 s on purpose: Thruster (its write timeout) and kamal-proxy drop a response that hasn't started after 30 s, and the visitor gets an empty reply instead |
 | `RAILWATCH_SERVER_PROXY_IDLE_TIMEOUT` | `60` | seconds a response that has started may go without a byte moving; past it the connection is closed |
-| `RAILWATCH_SERVER_NICE` | `10` | how far below the app's CPU priority the server runs (0-19; 0: the same). A busy dashboard can keep every core busy; measured in a 2-CPU container under 30 dashboard clients at the app's priority, the app's `/up` p50 went from 2 to 15 ms |
+| `RAILWATCH_SERVER_NICE` | `10` | how far below the app's CPU priority the server runs (0-19; 0: the same). A busy dashboard can keep every core busy; measured in a 2-CPU container under 30 dashboard clients at the app's priority, the app's `/up` p50 went from 2 to 15 ms. Not under a CPU quota (`docker --cpus`, Kubernetes CPU limits): the kernel throttles the container's processes together whatever their priority, and in that 2-CPU container under `--cpus 2` nice 10 measured no better than nice 0 (`/up` p99 190-580 ms at either); on 2 dedicated cores (`--cpuset-cpus`) it took `/up` p99 from 207-363 ms to 18-22 ms. In a quota-limited container give it real cores (a cpuset, or a VM) or keep dashboard use light |
 
 **Environments.** One environment per data dir, named after `Rails.env`:
 development, staging and production usually run on different machines,
@@ -169,7 +171,10 @@ Puma workers, jobs ── railwatch agent ── /ingest ───────�
   server orphaned by a SIGKILLed Puma is stopped by the next start.
 - **Proxy.** `/railwatch/*` is a prepended route to
   `Railwatch::Server::ProxyController`. It forwards the server's cookies
-  and Inertia headers, sets `Host`/`X-Forwarded-Proto`, adds the signed
+  and Inertia headers, sets `Host`/`X-Forwarded-Proto`, sets
+  `X-Forwarded-For` to the visitor's `request.remote_ip` (replacing any the
+  browser sent; the server runs with `RAILWATCH_TRUST_PROXY`, so its per-IP
+  sign-in and MCP limits count visitors, not the app), adds the signed
   header, and hands the request off: **no Puma thread waits for the
   server.** Past the gate the controller connects to the server and leaves
   the request to `ProxyHandoff`, a middleware outside every other one,

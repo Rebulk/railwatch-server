@@ -54,6 +54,12 @@ module Railwatch
           "RAILWATCH_URL" => @config.url || @config.local_url,
           "RAILWATCH_BASE_PATH" => @config.normalized_mount_path,
           "RAILWATCH_TRUSTED_PROXY_SECRET_FILE" => @data_dir.proxy_secret_file.to_s,
+          # Every dashboard request comes from the app's ProxyController,
+          # which sets X-Forwarded-For to the visitor's request.remote_ip
+          # (and never passes the browser's on), so the server's per-IP
+          # limits (sign-in, MCP) see visitors, not the app. The agents post
+          # /ingest on loopback without one and are keyed on 127.0.0.1.
+          "RAILWATCH_TRUST_PROXY" => "true",
           # A second server on this data dir (the new container of a deploy,
           # which has its own loopback) answers on its own port at once and
           # relays to the one holding serve.lock through serve.sock in the

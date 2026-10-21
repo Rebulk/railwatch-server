@@ -14,7 +14,7 @@ module Railwatch
     # Basic on and closed by default, or `base_controller_class` with Basic
     # off. One set of credentials for /railwatch whichever gem serves it.
     class Configuration
-      attr_accessor :enabled, :port, :data_dir, :mount_path, :binary, :url, :stop_timeout, :user, :wire_agent,
+      attr_accessor :enabled, :port, :data_dir, :mount_path, :binary, :url, :stop_timeout, :setup_timeout, :user, :wire_agent,
                     :max_live_connections, :max_proxied_requests, :proxy_connect_timeout, :proxy_first_byte_timeout,
                     :proxy_idle_timeout, :nice, :smtp, :mail_from, :backup, :google, :retention, :alert_delivery, :server_env
 
@@ -41,6 +41,10 @@ module Railwatch
         # server answers SIGTERM by finishing in-flight requests and committing
         # queued writes; an idle one is gone in well under a second.
         @stop_timeout = Float(ENV.fetch("RAILWATCH_SERVER_STOP_TIMEOUT", "15"))
+        # How long the first start of a data dir waits for `railwatch setup`
+        # (it takes about a second), before Puma listens. Past it the setup is
+        # KILLed and the app boots without the server; the next start retries.
+        @setup_timeout = Float(ENV.fetch("RAILWATCH_SERVER_SETUP_TIMEOUT", "30"))
         # Who the dashboard's visitor is, as the server should see them:
         # ->(controller) { { email:, name:, role: "admin" | "member" } }.
         @user = nil
@@ -68,7 +72,9 @@ module Railwatch
         @proxy_idle_timeout = Float(ENV.fetch("RAILWATCH_SERVER_PROXY_IDLE_TIMEOUT", "60"))
         # How much lower than the app's the server's CPU priority is (nice
         # increment, 0-19; 0 keeps the app's). The server can keep every core
-        # busy rendering dashboards; at 10 the app's requests come first.
+        # busy rendering dashboards; at 10 the app's requests come first. Not
+        # under a CPU quota (docker --cpus, Kubernetes limits), which stalls
+        # the app with the server whatever the priority.
         @nice = Integer(ENV.fetch("RAILWATCH_SERVER_NICE", "10"))
         # The server's own settings (Settings): nil means "from the app"
         # (Action Mailer's SMTP and From, credentials.railwatch_server's

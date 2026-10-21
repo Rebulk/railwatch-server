@@ -27,6 +27,10 @@ module Railwatch
       MAX_BUFFER = 1024 * 1024
       MAX_HEAD = 64 * 1024
       HOP_BY_HOP = %w[connection keep-alive proxy-connection].freeze
+      # The server's own HSTS (sent behind a trusted proxy with an https
+      # url): the host is the app's, and so is its policy (ProxyHandoff
+      # passes the app's on).
+      APP_OWNED = %w[strict-transport-security].freeze
       REASONS = { 502 => "Bad Gateway", 504 => "Gateway Timeout" }.freeze
 
       # input: what this side's peer is sent instead of what is read from io
@@ -224,7 +228,7 @@ module Railwatch
       # included), so only the connection headers change.
       def response_head(head, extra)
         status, *fields = head.split("\r\n")
-        fields.reject! { |field| HOP_BY_HOP.include?(field[/\A[^:]*/].strip.downcase) }
+        fields.reject! { |field| (HOP_BY_HOP + APP_OWNED).include?(field[/\A[^:]*/].strip.downcase) }
         fields.concat(extra.map { |name, value| "#{name}: #{value}" })
         "#{status}\r\n#{fields.map { "#{_1}\r\n" }.join}connection: close\r\n\r\n".b
       end
