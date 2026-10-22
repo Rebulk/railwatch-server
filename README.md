@@ -1,4 +1,4 @@
-# railwatch-server (prototype)
+# railwatch-server
 
 The Railwatch server, bundled as a gem. Add it to a Rails app and you get
 the **full** Railwatch dashboard at `/railwatch` (issues, alerts, the API
@@ -6,13 +6,11 @@ and MCP included), behind your app's own login, with no server to install.
 The server runs as **its own process** next to the app, started by Puma's
 master. It never runs inside a Puma worker.
 
-> Prototype; the name is temporary. Nothing here is published.
-
 ## How it relates to the other two
 
 | | what it is | license |
 |---|---|---|
-| [`railwatch`](https://github.com/Rebulk/railwatch) | the agent in your app; also has a Ruby "embedded" mode with its own dashboard | MIT |
+| [`railwatch`](https://github.com/Rebulk/railwatch) | the agent in your app; on its own it reports to Railwatch Cloud or a self-hosted server | MIT |
 | [`railwatch-rs`](https://github.com/Rebulk/railwatch-rs) | the server, one static binary; self-hosted on a VPS for many apps | AGPL-3.0-only |
 | **`railwatch-server`** (this) | `railwatch-rs`, prebuilt per platform, run and wired for one app | AGPL-3.0-only |
 
@@ -362,7 +360,6 @@ renders inside Puma's workers.
 - Releases must keep building the platform gems from a published
   railwatch-rs commit (AGPL section 6): `RAILWATCH_RS_SHA` in
   `.github/workflows/macos.yml`, and the same commit for the Linux builds.
-- Name: temporary.
 
 ## License
 
