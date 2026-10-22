@@ -200,9 +200,12 @@ Puma workers, jobs ── railwatch agent ── /ingest ───────�
   handoff applies; HTTP/2 ends at that proxy. It doesn't rewrite paths:
   the server itself serves under `/railwatch` (below). CSRF is the
   server's own (Origin check plus its token), so Rails' check is off for
-  this controller, and so is inertia_rails' (its middleware otherwise
-  answered every dashboard click with a 409 full reload, and its
-  `XSRF-TOKEN` at `Path=/` shadowed the server's, refusing every write).
+  this controller, and so is inertia_rails' (its `XSRF-TOKEN` at
+  `Path=/` shadowed the server's, refusing every write). inertia_rails'
+  middleware would also answer every dashboard click with a 409 full
+  reload, since the dashboard's Inertia version is the server's, not the
+  app's; the proxy removes `X-Inertia` from the request once it has been
+  forwarded, so the middleware leaves the response alone.
   Commenting, resolving, saving a view and changing a setting are tested
   through the proxy (`test/e2e/browser_writes.rb`, and by hand in Chromium).
 - **Live channel.** `/railwatch/cable` is a Rack hijack too; the browser's
