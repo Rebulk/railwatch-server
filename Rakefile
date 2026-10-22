@@ -4,8 +4,16 @@ require "rake/testtask"
 
 Rake::TestTask.new(:test) do |t|
   t.libs << "test"
-  t.test_files = FileList["test/**/*_test.rb"]
+  t.test_files = FileList["test/**/*_test.rb"].exclude("test/inertia_host_test.rb")
 end
+
+# Its own process: it boots Rails (inertia_rails needs it), and Rails.env
+# would then decide every other test's environment.
+Rake::TestTask.new(:test_inertia_host) do |t|
+  t.libs << "test"
+  t.test_files = FileList["test/inertia_host_test.rb"]
+end
+task test: :test_inertia_host
 
 PLATFORMS = %w[x86_64-linux aarch64-linux x86_64-darwin arm64-darwin].freeze
 
