@@ -25,7 +25,7 @@ namespace :railwatch_server do
     puts "data dir     #{dir.path}#{' (not provisioned)' unless dir.provisioned?}"
     puts "server       #{up ? 'UP' : 'DOWN'} on #{config.local_url}#{" (pid #{pid.read.split.first})" if pid.exist?}"
     puts "dashboard    #{config.normalized_mount_path}"
-    puts "agent        " + (Railwatch::Server.agent_configured_elsewhere? ? "configured elsewhere (#{Railwatch.config.local? ? 'transport :local' : Railwatch.config.ingest_url})" :
+    puts "agent        " + (Railwatch::Server.agent_configured_elsewhere? ? "configured elsewhere (#{Railwatch.config.ingest_url})" :
                              "reports to #{Railwatch.config.ingest_url}")
     puts "log          #{dir.log_file}"
     exit(up ? 0 : 1)

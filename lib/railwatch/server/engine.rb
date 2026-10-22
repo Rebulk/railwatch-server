@@ -45,7 +45,7 @@ module Railwatch
                             "the server's process creates it the first time it starts (Puma with `plugin :railwatch_server`, or " \
                             "railwatch_server:start); this process reports once it restarts after that")
         when :configured_elsewhere
-          Rails.logger.info("[railwatch-server] the railwatch agent is configured elsewhere (RAILWATCH_TOKEN or transport :local); " \
+          Rails.logger.info("[railwatch-server] the railwatch agent is configured elsewhere (RAILWATCH_TOKEN); " \
                             "the bundled server only serves the dashboard")
         end
       rescue Railwatch::Server::Error, Railwatch::Server::Binary::NotFound => e
