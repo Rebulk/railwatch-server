@@ -125,8 +125,8 @@ half-applied. `railwatch doctor` with `RAILWATCH_ENV_FILE` pointed at the
 file shows what the server reads.
 
 The agent is wired only when the app has not configured a destination:
-when `RAILWATCH_TOKEN` is set, or the agent uses `transport :local`, it is
-left alone and the bundled server serves only the dashboard.
+when `RAILWATCH_TOKEN` is set, it is left alone and the bundled server
+serves only the dashboard.
 
 **Who the server sees.** The dashboard's gate is the `railwatch` gem's:
 HTTP Basic, on and closed by default; or, with Basic off,

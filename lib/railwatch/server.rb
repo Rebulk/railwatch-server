@@ -41,9 +41,8 @@ module Railwatch
 
       # Whether the app reports somewhere of its own choosing, in which case
       # the agent is left alone: a token set (RAILWATCH_TOKEN or the
-      # initializer), or the embedded store (`transport = :local`).
+      # initializer).
       def agent_configured_elsewhere?
-        return true if Railwatch.config.local?
         return false if Railwatch.config.ingest_url == config.local_url
 
         Railwatch.config.token.to_s.strip != ""

@@ -88,8 +88,8 @@ Puma::Plugin.create do
   # gone. Each stop! is idempotent; the gem's own at_exit then does nothing.
   def shutdown
     @shutting_down = true
-    if defined?(::Railwatch) && ::Railwatch.respond_to?(:enabled?) && ::Railwatch.enabled? && !::Railwatch.config.local?
-      [ "Health", "Sessions", "Maintenance", "Export::Sender" ].each do |name|
+    if defined?(::Railwatch) && ::Railwatch.respond_to?(:enabled?) && ::Railwatch.enabled?
+      [ "Health", "Sessions" ].each do |name|
         mod = ::Railwatch.const_get(name) if ::Railwatch.const_defined?(name)
         mod.stop! if mod.respond_to?(:stop!)
       end
