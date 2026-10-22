@@ -9,12 +9,8 @@ require "action_controller/test_case"
 require "railwatch/server"
 require_relative "../app/controllers/railwatch/server/proxy_controller"
 
-begin
-  require "inertia_rails"
-  require "inertia_rails/extensions/request"
-rescue LoadError
-  nil
-end
+require "inertia_rails"
+require "inertia_rails/extensions/request"
 
 # A host app on inertia_rails puts its middleware around the proxy, and that
 # middleware answers an Inertia visit whose X-Inertia-Version isn't the app's
@@ -24,7 +20,6 @@ end
 # version, not at what the controller is).
 class InertiaHostTest < Minitest::Test
   def setup
-    skip "inertia_rails is not installed" unless defined?(InertiaRails::Middleware)
     # What the gem's engine does when the app boots.
     ActionController::Base.include(InertiaRails::Controller) unless ActionController::Base < InertiaRails::Controller
     ActionDispatch::Request.include(InertiaRails::InertiaRequest) if defined?(InertiaRails::InertiaRequest)
