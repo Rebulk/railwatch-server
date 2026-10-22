@@ -110,16 +110,20 @@ module Railwatch
       # An app on inertia_rails has its controller module in every
       # ActionController::Base, this one included, and two of its behaviours
       # break the dashboard, whose Inertia protocol is the server's end to
-      # end. Its middleware compared the dashboard's X-Inertia-Version with
-      # the app's and answered 409 to every Inertia visit, so each click was
-      # a full page load; hiding inertia_configuration makes the middleware
-      # leave this controller's requests alone. Its after_action wrote the
-      # app's own XSRF-TOKEN (Path=/) on every response, so the browser held
-      # two and sent the app's to the server, which refused every write;
-      # forgery protection is off here (the server checks its own token),
-      # and that after_action skips a controller without it.
-      def respond_to?(name, include_all = false)
-        name.to_sym == :inertia_configuration ? false : super
+      # end. Its middleware compares the dashboard's X-Inertia-Version with
+      # the app's and answers 409 to every Inertia visit, so each click was
+      # a full page load. Once this controller has answered (forwarded, or
+      # refused at the gate), the request's X-Inertia is removed, so the
+      # middleware, on its way out, sees no Inertia visit (every
+      # inertia_rails version checks that header first). Its after_action
+      # wrote the app's own XSRF-TOKEN (Path=/) on every response, so the
+      # browser held two and sent the app's to the server, which refused
+      # every write; forgery protection is off here (the server checks its
+      # own token), and that after_action skips a controller without it.
+      def process_action(...)
+        super
+      ensure
+        request.delete_header("HTTP_X_INERTIA")
       end
 
       def protect_against_forgery? = false
