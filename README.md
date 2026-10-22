@@ -222,8 +222,8 @@ Puma workers, jobs ── railwatch agent ── /ingest ───────�
 ## The server side (Rebulk/railwatch-rs)
 
 The server features this gem relies on are upstream, in Rebulk/railwatch-rs
-`main` from `ef87f72` (PR #16), and the dashboard's mount handling is in the
-railwatch gem from 0.9.3. Every setting is off by default, so a self-hosted
+`main` from `ef87f72` (PR #16), and the dashboard's mount handling is part of
+the server's frontend. Every setting is off by default, so a self-hosted
 install is unchanged. Documented in railwatch-rs `docs/SELF-HOST.md`,
 "Running behind an app".
 
