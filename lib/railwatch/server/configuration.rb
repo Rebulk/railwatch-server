@@ -16,7 +16,8 @@ module Railwatch
     class Configuration
       attr_accessor :enabled, :port, :data_dir, :mount_path, :binary, :url, :stop_timeout, :setup_timeout, :user, :wire_agent,
                     :max_live_connections, :max_proxied_requests, :proxy_connect_timeout, :proxy_first_byte_timeout,
-                    :proxy_idle_timeout, :nice, :smtp, :mail_from, :backup, :google, :retention, :alert_delivery, :server_env
+                    :proxy_idle_timeout, :nice, :smtp, :mail_from, :backup, :google, :retention, :alert_delivery, :server_env,
+                    :agent_access
 
       def initialize
         # nil: on, except under Rails.env.test (a test run on a machine with
@@ -48,6 +49,13 @@ module Railwatch
         # Who the dashboard's visitor is, as the server should see them:
         # ->(controller) { { email:, name:, role: "admin" | "member" } }.
         @user = nil
+        # Whether <mount>/mcp and <mount>/api/ (what an AI agent calls) are
+        # signed for the visitor like the dashboard, so the agent needs no
+        # token. nil: only in development, for a request from this machine
+        # to a local host name (ProxyController#agent_access?). true: for
+        # every request that passes the gate, in any environment. false:
+        # never; an agent sends a token (Authorization: Bearer rwp_...).
+        @agent_access = env_bool("RAILWATCH_SERVER_AGENT_ACCESS", nil)
         # Point the railwatch agent at the bundled server when the app has not
         # configured one (no RAILWATCH_TOKEN). Off: the app wires it itself.
         @wire_agent = env_bool("RAILWATCH_SERVER_WIRE_AGENT", true)

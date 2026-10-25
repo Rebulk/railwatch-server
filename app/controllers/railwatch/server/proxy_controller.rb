@@ -103,6 +103,8 @@ module Railwatch
         Purpose Sec-Purpose Sec-Fetch-Site Sec-Fetch-Mode Sec-Fetch-Dest If-None-Match If-Modified-Since
       ].freeze
       HOP_BY_HOP = %w[connection keep-alive transfer-encoding content-length te trailer upgrade proxy-connection].freeze
+      # Host names that only reach this machine (agent_access?).
+      LOCAL_HOSTS = %w[localhost 127.0.0.1 ::1 [::1]].freeze
 
       skip_forgery_protection if respond_to?(:skip_forgery_protection)
       before_action :authenticate_by_http_basic
@@ -147,9 +149,15 @@ module Railwatch
 
       private
 
+      # An agent's Bearer token takes the one Authorization header Basic would
+      # need, so a request to MCP or the API with one is left to the server,
+      # which checks the token (401 without a valid one) as a standalone
+      # railwatch-rs does. The app's own before_actions (base_controller_class)
+      # still run.
       def authenticate_by_http_basic
         config = Railwatch.config
         return unless config.http_basic_auth_enabled
+        return if agent_bearer
         return if config.http_basic_auth_ok?(request)
 
         request_http_basic_authentication("Railwatch")
@@ -172,6 +180,31 @@ module Railwatch
         ProxyAuth.sign(secret, email: v[:email], name: v[:name], role: v[:role])
       end
 
+      # The server's MCP endpoint and JSON API: what an AI agent calls.
+      def agent_request?
+        rest = request.path.delete_prefix(Railwatch::Server.config.normalized_mount_path)
+        rest == "/mcp" || rest.start_with?("/api/")
+      end
+
+      # Whether an agent request is signed for the visitor (config.agent_access).
+      # By default only in development, and only for a request from this
+      # machine (request.local?: a dev server bound to 0.0.0.0 still refuses
+      # the LAN) to a local host name (a page on another site that rebinds
+      # its own name to 127.0.0.1 arrives with that name as Host).
+      def agent_access?
+        setting = Railwatch::Server.config.agent_access
+        return setting unless setting.nil?
+
+        Railwatch::Server.config.environment == "development" && request.local? && LOCAL_HOSTS.include?(request.host)
+      end
+
+      # An agent's own token, which the server checks: sent on as it came,
+      # and the visitor is not signed (the server would ignore them anyway).
+      def agent_bearer
+        value = request.authorization.to_s
+        value if agent_request? && value.start_with?("Bearer ")
+      end
+
       def upstream_headers(secret)
         headers = FORWARDED_HEADERS.each_with_object({}) do |name, h|
           value = request.headers[name]
@@ -188,7 +221,13 @@ module Railwatch
         # and only that: the server (RAILWATCH_TRUST_PROXY) keys its per-IP
         # limits on the last address here.
         headers["X-Forwarded-For"] = request.remote_ip
-        headers[ProxyAuth::HEADER] = signed_header(secret)
+        # An agent request without access goes on unsigned: the server's 401
+        # tells the agent to send a token.
+        if (bearer = agent_bearer)
+          headers["Authorization"] = bearer
+        elsif !agent_request? || agent_access?
+          headers[ProxyAuth::HEADER] = signed_header(secret)
+        end
         headers
       end
 
