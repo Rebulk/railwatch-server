@@ -104,6 +104,7 @@ class ProxyControllerTest < Minitest::Test
   end
 
   def test_agent_access_reads_the_environment
+    saved = ENV["RAILWATCH_SERVER_AGENT_ACCESS"]
     ENV["RAILWATCH_SERVER_AGENT_ACCESS"] = "true"
     assert_equal true, Railwatch::Server::Configuration.new.agent_access
     ENV["RAILWATCH_SERVER_AGENT_ACCESS"] = "0"
@@ -111,7 +112,18 @@ class ProxyControllerTest < Minitest::Test
     ENV.delete("RAILWATCH_SERVER_AGENT_ACCESS")
     assert_nil Railwatch::Server::Configuration.new.agent_access
   ensure
-    ENV.delete("RAILWATCH_SERVER_AGENT_ACCESS")
+    ENV["RAILWATCH_SERVER_AGENT_ACCESS"] = saved
+  end
+
+  def test_agent_requests_are_recognised_under_a_root_mount
+    config = Railwatch::Server.config
+    saved = config.mount_path
+    config.mount_path = "/"
+    assert signed?(agent_headers("/mcp")), "development, from this machine"
+    refute signed?(agent_headers("/mcp", env: "production")), "a root mount does not make MCP a page"
+    assert_equal "Bearer rwp_abc", agent_headers("/api/v1/me", env: "production", authorization: "Bearer rwp_abc")["Authorization"]
+  ensure
+    config.mount_path = saved
   end
 
   # The Basic gate, for a request with these headers (Basic on, configured).

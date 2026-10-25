@@ -147,8 +147,10 @@ created in the server on first sight. Nobody signs in to the server itself.
 ## AI agents
 
 The server's MCP endpoint and JSON API are under the mount too
-(`/railwatch/mcp`, `/railwatch/api/v1`). In development an agent on the
-same machine needs no token:
+(`/railwatch/mcp`, `/railwatch/api/v1`). With a bundled railwatch-rs that
+takes the proxy's signed user on them (Rebulk/railwatch-rs#49, not in the
+v0.2.4 this release bundles; until then they answer 401 without a token),
+an agent on the same machine needs no token in development:
 
 ```sh
 claude mcp add --transport http railwatch http://localhost:3000/railwatch/mcp

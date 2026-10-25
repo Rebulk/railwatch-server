@@ -182,7 +182,8 @@ module Railwatch
 
       # The server's MCP endpoint and JSON API: what an AI agent calls.
       def agent_request?
-        rest = request.path.delete_prefix(Railwatch::Server.config.normalized_mount_path)
+        mount = Railwatch::Server.config.normalized_mount_path
+        rest = mount == "/" ? request.path : request.path.delete_prefix(mount)
         rest == "/mcp" || rest.start_with?("/api/")
       end
 
