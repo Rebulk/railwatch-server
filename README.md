@@ -91,6 +91,7 @@ whether the server is up, and where the agent reports.
 | `RAILWATCH_SERVER_PROXY_CONNECT_TIMEOUT` | `2` | seconds to connect to the server on loopback; past it, 503 |
 | `RAILWATCH_SERVER_PROXY_FIRST_BYTE_TIMEOUT` | `25` | seconds for the server to start answering a dashboard request; past it, 504 with a message. Under 30 s on purpose: Thruster (its write timeout) and kamal-proxy drop a response that hasn't started after 30 s, and the visitor gets an empty reply instead |
 | `RAILWATCH_SERVER_PROXY_IDLE_TIMEOUT` | `60` | seconds a response that has started may go without a byte moving; past it the connection is closed |
+| `RAILWATCH_SERVER_AGENT_ACCESS` | on in development for this machine only, off elsewhere | whether `<mount>/mcp` and `<mount>/api/` (an AI agent's requests) are signed for the visitor like the dashboard, so the agent needs no token. See [AI agents](#ai-agents) |
 | `RAILWATCH_SERVER_NICE` | `10` | how far below the app's CPU priority the server runs (0-19; 0: the same). A busy dashboard can keep every core busy; measured in a 2-CPU container under 30 dashboard clients at the app's priority, the app's `/up` p50 went from 2 to 15 ms. Not under a CPU quota (`docker --cpus`, Kubernetes CPU limits): the kernel throttles the container's processes together whatever their priority, and in that 2-CPU container under `--cpus 2` nice 10 measured no better than nice 0 (`/up` p99 190-580 ms at either); on 2 dedicated cores (`--cpuset-cpus`) it took `/up` p99 from 207-363 ms to 18-22 ms. In a quota-limited container give it real cores (a cpuset, or a VM) or keep dashboard use light |
 
 **Environments.** One environment per data dir, named after `Rails.env`:
@@ -142,6 +143,55 @@ end
 
 Without it, the HTTP Basic user name (or "Operator") is an admin. Users are
 created in the server on first sight. Nobody signs in to the server itself.
+
+## AI agents
+
+The server's MCP endpoint and JSON API are under the mount too
+(`/railwatch/mcp`, `/railwatch/api/v1`). With a bundled railwatch-rs that
+takes the proxy's signed user on them (Rebulk/railwatch-rs#49, not in the
+v0.2.4 this release bundles; until then they answer 401 without a token),
+an agent on the same machine needs no token in development:
+
+```sh
+claude mcp add --transport http railwatch http://localhost:3000/railwatch/mcp
+```
+
+(or `bin/rails generate railwatch:agents` from the railwatch gem, which
+writes `.mcp.json` and the instructions). The proxy signs those requests
+for the visitor exactly as it signs dashboard pages, and the server takes
+the signed header as that user on MCP and the API: every read tool, and the
+issue writes (`update_issue`, `add_comment`), attributed to the user and
+"agent".
+
+**What that opens, and to whom.** By default (`agent_access` unset) only
+when all of these hold:
+
+- `Rails.env.development?` (the server's environment, `config.environment`);
+- the request comes from this machine (`request.local?`: `127.0.0.1` or
+  `::1`). A dev server bound to `0.0.0.0` still refuses the LAN;
+- its `Host` is `localhost`, `127.0.0.1` or `::1`. A web page whose own name
+  was rebound to `127.0.0.1` (DNS rebinding) arrives under that name, not
+  these, and gets no signature;
+- the dashboard's gate passes, as for any page (open in development unless
+  you configured HTTP Basic or a base controller).
+
+The server also refuses a signed MCP or API request the browser marks as
+coming from another site (`Origin` that is not the `Host`, or
+`Sec-Fetch-Site: cross-site`), so a page you visit can't call them through
+your browser. What is left: anything that can send a request to
+`localhost:3000` from your machine (another local user, a local process)
+can read the development app's telemetry and comment on its issues. That is
+already true of the dashboard at `/railwatch` in development, and of the
+dev app itself.
+
+Everywhere else agent requests are forwarded without the visitor and the
+server answers 401 until the agent sends a token (`Authorization: Bearer
+rwp_...` from Settings -> Profile), which the proxy passes through
+unchanged; a token always wins over the signature, in development too.
+`config.agent_access = true` (or `RAILWATCH_SERVER_AGENT_ACCESS=1`) signs
+agent requests for whoever passes the gate in any environment: only behind
+a gate that authenticates people (`base_controller_class` with your login),
+since the agent then acts as them. `false` turns it off in development too.
 
 ## How it works
 
