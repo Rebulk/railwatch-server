@@ -25,7 +25,7 @@ Gem::Specification.new do |spec|
   end
   spec.require_paths = [ "lib" ]
 
-  spec.add_dependency "railwatch", ">= 1.1"
+  spec.add_dependency "railwatch", ">= 1.2"
   spec.add_dependency "railties", ">= 7.2"
 
   # test/inertia_host_test.rb: the 3.22 middleware that turned dashboard clicks into full reloads.
