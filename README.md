@@ -11,8 +11,8 @@ master. It never runs inside a Puma worker.
 | | what it is | license |
 |---|---|---|
 | [`railwatch`](https://github.com/Rebulk/railwatch) | the agent in your app; on its own it reports to Railwatch Cloud or a self-hosted server | MIT |
-| [`railwatch-rs`](https://github.com/Rebulk/railwatch-rs) | the server, one static binary; self-hosted on a VPS for many apps | AGPL-3.0-only |
-| **`railwatch-server`** (this) | `railwatch-rs`, prebuilt per platform, run and wired for one app | AGPL-3.0-only |
+| [`railwatch-rs`](https://github.com/Rebulk/railwatch-rs) | the server, one static binary; self-hosted on a VPS for many apps | FSL-1.1-ALv2 |
+| **`railwatch-server`** (this) | `railwatch-rs`, prebuilt per platform, run and wired for one app | FSL-1.1-ALv2 |
 
 This gem depends on `railwatch` and points the agent at the bundled server.
 It is the same server you would self-host, at the same version, just started
@@ -407,11 +407,18 @@ renders inside Puma's workers.
   knows; the proxied users are admins/members. Transferring ownership
   works in Settings > Members.
 - Releases must keep building the platform gems from a published
-  railwatch-rs commit (AGPL section 6): `RAILWATCH_RS_SHA` in
+  railwatch-rs commit: `RAILWATCH_RS_SHA` in
   `.github/workflows/macos.yml`, and the same commit for the Linux builds.
 
 ## License
 
-AGPL-3.0-only (LICENSE). The platform gems contain the Railwatch server
-binary; NOTICE explains what that means for your app (nothing: it runs as
-a separate program) and where the corresponding source is.
+FSL-1.1-ALv2, the Functional Source License with an Apache 2.0 future
+license (LICENSE). Use it, change it and run it for your own apps freely;
+what it does not allow is offering Railwatch, or something substantially
+like it, to others as a commercial product or service. Each release becomes
+Apache-2.0 two years after it is published. Releases up to and including
+0.1.6 were published under AGPL-3.0-only and stay available under it.
+
+The platform gems contain the Railwatch server binary; NOTICE explains what
+that means for your app (nothing: it runs as a separate program) and where
+its source is.

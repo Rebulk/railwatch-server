@@ -13,7 +13,7 @@ require_relative "server/relay"
 require_relative "server/proxy_handoff"
 
 module Railwatch
-  # The Railwatch server (the AGPL Rust binary, bundled) run next to this
+  # The Railwatch server (the Rust binary, bundled) run next to this
   # app: started by Puma's master (`plugin :railwatch_server`) or
   # `bin/rails railwatch_server:start`, never inside a Puma worker; the
   # dashboard proxied at /railwatch behind the app's own gate; the railwatch
