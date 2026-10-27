@@ -414,8 +414,11 @@ renders inside Puma's workers.
 
 FSL-1.1-ALv2, the Functional Source License with an Apache 2.0 future
 license (LICENSE). Use it, change it and run it for your own apps freely;
-what it does not allow is offering Railwatch, or something substantially
-like it, to others as a commercial product or service. Each version
+what it does not allow is a Competing Use: making Railwatch available to
+others in a commercial product or service that substitutes for Railwatch,
+offers substantially similar functionality, or substitutes for another
+product or service Rebulk offers using Railwatch (one that existed when that
+version was released). LICENSE has the exact terms. Each version
 released under FSL also becomes available under Apache-2.0 two years after
 its release. Releases up to and including 0.1.6 were published under
 AGPL-3.0-only and stay available under it alone; the Apache-2.0 grant does
