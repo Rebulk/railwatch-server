@@ -24,7 +24,7 @@ permissions:
   contents: read
 
 env:
-  RAILWATCH_RS_SHA: 36cd8771f1a6da2cf1b94052f7b2052a8a1ea630  # v0.2.7
+  RAILWATCH_RS_SHA: 88afcbaeec94fa0016fc3c921ed1f001c0285816  # v0.2.10
   RUST_TOOLCHAIN: 1.99.1
   CARGO_BUILD_JOBS: "4"
 
