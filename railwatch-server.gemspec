@@ -8,9 +8,9 @@ Gem::Specification.new do |spec|
   spec.authors = [ "Rebulk" ]
   spec.summary = "The Railwatch server, bundled: the full Railwatch dashboard at /railwatch in your Rails app, run as its own process"
   spec.homepage = "https://github.com/Rebulk/railwatch-server"
-  # This gem ships the AGPL server binary (NOTICE). The railwatch agent it
+  # This gem ships the Railwatch server binary (NOTICE). The railwatch agent it
   # depends on is MIT and a separate gem.
-  spec.license = "AGPL-3.0-only"
+  spec.license = "FSL-1.1-ALv2"
   spec.required_ruby_version = ">= 3.2"
   spec.metadata["source_code_uri"] = spec.homepage
   spec.metadata["railwatch_rs_source"] = "https://github.com/Rebulk/railwatch-rs"
