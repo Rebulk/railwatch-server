@@ -2,9 +2,9 @@
 
 module Railwatch
   module Server
-    VERSION = "0.1.6"
+    VERSION = "0.1.7"
     # The published railwatch-rs commit the bundled binaries are built from
     # (README, "The server side"); its source.
-    RAILWATCH_RS = "32ee2be2ffad8e262ffcd12c26649b960ed7fd08"
+    RAILWATCH_RS = "2f5cf8ff050ba398f9f83105f7115254ffe421b7"
   end
 end
