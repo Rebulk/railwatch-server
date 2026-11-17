@@ -2,7 +2,7 @@
 
 require "minitest/autorun"
 require "tmpdir"
-require "railwatch/server"
+require "railwatch/sidecar"
 
 class SettingsTest < Minitest::Test
   FakeCredentials = Struct.new(:data) do
@@ -11,10 +11,10 @@ class SettingsTest < Minitest::Test
   FakeRails = Struct.new(:credentials)
 
   def setup
-    @config = Railwatch::Server::Configuration.new
+    @config = Railwatch::Sidecar::Configuration.new
   end
 
-  def settings(credentials = {}) = Railwatch::Server::Settings.new(@config, rails: FakeRails.new(FakeCredentials.new(credentials)))
+  def settings(credentials = {}) = Railwatch::Sidecar::Settings.new(@config, rails: FakeRails.new(FakeCredentials.new(credentials)))
 
   def test_the_apps_smtp_settings_become_the_servers
     @config.smtp = { address: "smtp.example.com", port: 465, user_name: "u", password: "p w#1", tls: true }
@@ -28,7 +28,7 @@ class SettingsTest < Minitest::Test
   end
 
   def test_backup_and_google_come_from_credentials
-    env = settings(railwatch_server: {
+    env = settings(railwatch_sidecar: {
       backup: { endpoint: "https://s3.example.com", bucket: "b", access_key_id: "AK", secret_access_key: "SK" },
       google: { client_id: "cid", client_secret: "cs" }
     }).env
@@ -38,14 +38,14 @@ class SettingsTest < Minitest::Test
   end
 
   def test_an_incomplete_backup_is_refused_rather_than_half_applied
-    error = assert_raises(Railwatch::Server::Settings::Invalid) { settings(railwatch_server: { backup: { bucket: "b" } }).env }
+    error = assert_raises(Railwatch::Sidecar::Settings::Invalid) { settings(railwatch_sidecar: { backup: { bucket: "b" } }).env }
     assert_match(/endpoint, access_key_id, secret_access_key/, error.message)
   end
 
   def test_an_explicit_empty_setting_turns_the_credential_off
     @config.backup = {}
     @config.google = false
-    env = settings(railwatch_server: { google: { client_id: "cid", client_secret: "cs" } }).env
+    env = settings(railwatch_sidecar: { google: { client_id: "cid", client_secret: "cs" } }).env
     refute env.key?("RAILWATCH_GOOGLE_CLIENT_ID")
     refute env.key?("RAILWATCH_BACKUP_S3_BUCKET")
   end
@@ -70,13 +70,13 @@ class SettingsTest < Minitest::Test
       assert_includes File.read(path), %(RAILWATCH_SMTP_PASSWORD="secret")
 
       @config.smtp = { address: "smtp.example.com", password: "a\nRAILWATCH_URL=evil" }
-      assert_raises(Railwatch::Server::Settings::Invalid) { settings.write!(path) }
+      assert_raises(Railwatch::Sidecar::Settings::Invalid) { settings.write!(path) }
     end
   end
 
   def test_unreadable_credentials_mean_no_settings
     broken = Object.new
     def broken.dig(*) = raise("ActiveSupport::MessageEncryptor::InvalidMessage")
-    assert_empty Railwatch::Server::Settings.new(@config, rails: FakeRails.new(broken)).env
+    assert_empty Railwatch::Sidecar::Settings.new(@config, rails: FakeRails.new(broken)).env
   end
 end

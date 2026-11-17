@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 module Railwatch
-  module Server
+  module Sidecar
     # The last step of a proxied dashboard request. ProxyController#forward
     # checks the gate, connects to the server and leaves the request here
     # (env[ENV_KEY]); this middleware, outside every other one, takes the
@@ -14,7 +14,7 @@ module Railwatch
     # Devise's timeoutable), which goes out with the server's response, and
     # every body proxy (the executor, the query cache) has finished.
     class ProxyHandoff
-      ENV_KEY = "railwatch_server.handoff"
+      ENV_KEY = "railwatch_sidecar.handoff"
       # The app's own headers that still apply to a response the server
       # wrote; every other header of the app's empty 200 is dropped.
       APP_HEADERS = %w[set-cookie strict-transport-security].freeze

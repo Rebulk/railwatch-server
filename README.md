@@ -1,4 +1,4 @@
-# railwatch-server
+# railwatch-sidecar
 
 The Railwatch server, bundled as a gem. Add it to a Rails app and you get
 the **full** Railwatch dashboard at `/railwatch` (issues, alerts, the API
@@ -6,13 +6,31 @@ and MCP included), behind your app's own login, with no server to install.
 The server runs as **its own process** next to the app, started by Puma's
 master. It never runs inside a Puma worker.
 
+## Coming from railwatch-server
+
+This gem was called `railwatch-server` until 0.2.0. Replace the gem in your
+Gemfile, then rename at your own pace: every old name keeps working until
+1.0 and warns once per process.
+
+| before | now |
+|---|---|
+| `gem "railwatch-server"` | `gem "railwatch-sidecar"` |
+| `plugin :railwatch_server` | `plugin :railwatch_sidecar` |
+| `RAILWATCH_SERVER_*` | `RAILWATCH_SIDECAR_*` (the new name wins when both are set) |
+| `Railwatch::Server.configure` | `Railwatch::Sidecar.configure` |
+| `bin/rails railwatch_server:start` / `:status` | `bin/rails railwatch_sidecar:start` / `:status` |
+| `credentials.railwatch_server` | `credentials.railwatch_sidecar` |
+
+The data dir (`storage/railwatch/<env>`), the port and the dashboard path
+are unchanged, so nothing is moved or re-provisioned.
+
 ## How it relates to the other two
 
 | | what it is | license |
 |---|---|---|
 | [`railwatch`](https://github.com/Rebulk/railwatch) | the agent in your app; on its own it reports to Railwatch Cloud or a self-hosted server | MIT |
 | [`railwatch-rs`](https://github.com/Rebulk/railwatch-rs) | the server, one static binary; self-hosted on a VPS for many apps | FSL-1.1-ALv2 |
-| **`railwatch-server`** (this) | `railwatch-rs`, prebuilt per platform, run and wired for one app | FSL-1.1-ALv2 |
+| **`railwatch-sidecar`** (this) | `railwatch-rs`, prebuilt per platform, run and wired for one app | FSL-1.1-ALv2 |
 
 This gem depends on `railwatch` and points the agent at the bundled server.
 It is the same server you would self-host, at the same version, just started
@@ -25,12 +43,12 @@ if you want the history).
 ```ruby
 # Gemfile
 gem "railwatch"
-gem "railwatch-server"
+gem "railwatch-sidecar"
 ```
 
 ```ruby
 # config/puma.rb
-plugin :railwatch_server
+plugin :railwatch_sidecar
 ```
 
 ```ruby
@@ -48,51 +66,51 @@ there. It then starts `railwatch serve` on `127.0.0.1:28790` and points the
 agent at it.
 
 Only a process that starts the server creates that directory: Puma with the
-plugin (`bin/rails server` or `puma`) and `bin/rails railwatch_server:start`.
+plugin (`bin/rails server` or `puma`) and `bin/rails railwatch_sidecar:start`.
 Anything else (`assets:precompile` in a Dockerfile, a console, a Solid Queue
 worker) reads it and, until it exists, leaves the agent alone and says so.
 So an image build ships no token, proxy secret or `secret_key_base`; each
 volume gets its own on first start. A job worker started before the first
 server reports from its next restart. A `railwatch setup` that hangs never
-holds up the boot past `RAILWATCH_SERVER_SETUP_TIMEOUT` (below).
+holds up the boot past `RAILWATCH_SIDECAR_SETUP_TIMEOUT` (below).
 
 Bundler picks the platform gem with the binary for your machine:
 x86_64-linux, aarch64-linux, x86_64-darwin or arm64-darwin. On anything
-else the plain gem installs and tells you to set `RAILWATCH_SERVER_BINARY`
+else the plain gem installs and tells you to set `RAILWATCH_SIDECAR_BINARY`
 to a `railwatch` you installed yourself.
 
 ### Without Puma
 
-Use `bin/rails railwatch_server:start` (foreground, TERM to stop), e.g. as a
+Use `bin/rails railwatch_sidecar:start` (foreground, TERM to stop), e.g. as a
 Procfile line:
 
 ```
-railwatch: bin/rails railwatch_server:start
+railwatch: bin/rails railwatch_sidecar:start
 ```
 
-`bin/rails railwatch_server:status` reports the binary, the data dir,
+`bin/rails railwatch_sidecar:status` reports the binary, the data dir,
 whether the server is up, and where the agent reports.
 
 ## Configuration
 
 | env | default | |
 |---|---|---|
-| `RAILWATCH_SERVER_ENABLED` | on, off under `Rails.env.test` | off: no server, no route, the agent untouched |
-| `RAILWATCH_SERVER_PORT` | `28790` | loopback port. Fixed, not picked at boot, so every process of the app finds the same server |
-| `RAILWATCH_SERVER_DATA_DIR` | `storage/railwatch/<Rails.env>` | put it on the volume that survives deploys |
-| `RAILWATCH_SERVER_MOUNT_PATH` | `/railwatch` | |
-| `RAILWATCH_SERVER_URL` | the loopback URL | public URL of the app, for links in alert emails and Secure cookies |
-| `RAILWATCH_SERVER_BINARY` | the platform gem's | your own `railwatch` |
-| `RAILWATCH_SERVER_STOP_TIMEOUT` | `15` | seconds Puma's exit waits for the server to drain |
-| `RAILWATCH_SERVER_SETUP_TIMEOUT` | `30` | seconds the first start of a data dir waits for `railwatch setup` (about a second), before Puma listens. Past it the setup is KILLed, the app boots without the server (agent not wired, the dashboard's 503 says why) and the next start retries |
-| `RAILWATCH_SERVER_WIRE_AGENT` | `true` | off: you configure the agent yourself |
-| `RAILWATCH_SERVER_MAX_LIVE_CONNECTIONS` | `64` | open live-update connections per app process (one per dashboard tab); past it the dashboard works without live updates |
-| `RAILWATCH_SERVER_MAX_PROXIED_REQUESTS` | `64` | dashboard requests in flight per app process (waiting on the server or streaming back); past it a dashboard request gets 503 with `Retry-After: 1` at once. The app's own requests are never affected |
-| `RAILWATCH_SERVER_PROXY_CONNECT_TIMEOUT` | `2` | seconds to connect to the server on loopback; past it, 503 |
-| `RAILWATCH_SERVER_PROXY_FIRST_BYTE_TIMEOUT` | `25` | seconds for the server to start answering a dashboard request; past it, 504 with a message. Under 30 s on purpose: Thruster (its write timeout) and kamal-proxy drop a response that hasn't started after 30 s, and the visitor gets an empty reply instead |
-| `RAILWATCH_SERVER_PROXY_IDLE_TIMEOUT` | `60` | seconds a response that has started may go without a byte moving; past it the connection is closed |
-| `RAILWATCH_SERVER_AGENT_ACCESS` | on in development for this machine only, off elsewhere | whether `<mount>/mcp` and `<mount>/api/` (an AI agent's requests) are signed for the visitor like the dashboard, so the agent needs no token. See [AI agents](#ai-agents) |
-| `RAILWATCH_SERVER_NICE` | `10` | how far below the app's CPU priority the server runs (0-19; 0: the same). A busy dashboard can keep every core busy; measured in a 2-CPU container under 30 dashboard clients at the app's priority, the app's `/up` p50 went from 2 to 15 ms. Not under a CPU quota (`docker --cpus`, Kubernetes CPU limits): the kernel throttles the container's processes together whatever their priority, and in that 2-CPU container under `--cpus 2` nice 10 measured no better than nice 0 (`/up` p99 190-580 ms at either); on 2 dedicated cores (`--cpuset-cpus`) it took `/up` p99 from 207-363 ms to 18-22 ms. In a quota-limited container give it real cores (a cpuset, or a VM) or keep dashboard use light |
+| `RAILWATCH_SIDECAR_ENABLED` | on, off under `Rails.env.test` | off: no server, no route, the agent untouched |
+| `RAILWATCH_SIDECAR_PORT` | `28790` | loopback port. Fixed, not picked at boot, so every process of the app finds the same server |
+| `RAILWATCH_SIDECAR_DATA_DIR` | `storage/railwatch/<Rails.env>` | put it on the volume that survives deploys |
+| `RAILWATCH_SIDECAR_MOUNT_PATH` | `/railwatch` | |
+| `RAILWATCH_SIDECAR_URL` | the loopback URL | public URL of the app, for links in alert emails and Secure cookies |
+| `RAILWATCH_SIDECAR_BINARY` | the platform gem's | your own `railwatch` |
+| `RAILWATCH_SIDECAR_STOP_TIMEOUT` | `15` | seconds Puma's exit waits for the server to drain |
+| `RAILWATCH_SIDECAR_SETUP_TIMEOUT` | `30` | seconds the first start of a data dir waits for `railwatch setup` (about a second), before Puma listens. Past it the setup is KILLed, the app boots without the server (agent not wired, the dashboard's 503 says why) and the next start retries |
+| `RAILWATCH_SIDECAR_WIRE_AGENT` | `true` | off: you configure the agent yourself |
+| `RAILWATCH_SIDECAR_MAX_LIVE_CONNECTIONS` | `64` | open live-update connections per app process (one per dashboard tab); past it the dashboard works without live updates |
+| `RAILWATCH_SIDECAR_MAX_PROXIED_REQUESTS` | `64` | dashboard requests in flight per app process (waiting on the server or streaming back); past it a dashboard request gets 503 with `Retry-After: 1` at once. The app's own requests are never affected |
+| `RAILWATCH_SIDECAR_PROXY_CONNECT_TIMEOUT` | `2` | seconds to connect to the server on loopback; past it, 503 |
+| `RAILWATCH_SIDECAR_PROXY_FIRST_BYTE_TIMEOUT` | `25` | seconds for the server to start answering a dashboard request; past it, 504 with a message. Under 30 s on purpose: Thruster (its write timeout) and kamal-proxy drop a response that hasn't started after 30 s, and the visitor gets an empty reply instead |
+| `RAILWATCH_SIDECAR_PROXY_IDLE_TIMEOUT` | `60` | seconds a response that has started may go without a byte moving; past it the connection is closed |
+| `RAILWATCH_SIDECAR_AGENT_ACCESS` | on in development for this machine only, off elsewhere | whether `<mount>/mcp` and `<mount>/api/` (an AI agent's requests) are signed for the visitor like the dashboard, so the agent needs no token. See [AI agents](#ai-agents) |
+| `RAILWATCH_SIDECAR_NICE` | `10` | how far below the app's CPU priority the server runs (0-19; 0: the same). A busy dashboard can keep every core busy; measured in a 2-CPU container under 30 dashboard clients at the app's priority, the app's `/up` p50 went from 2 to 15 ms. Not under a CPU quota (`docker --cpus`, Kubernetes CPU limits): the kernel throttles the container's processes together whatever their priority, and in that 2-CPU container under `--cpus 2` nice 10 measured no better than nice 0 (`/up` p99 190-580 ms at either); on 2 dedicated cores (`--cpuset-cpus`) it took `/up` p99 from 207-363 ms to 18-22 ms. In a quota-limited container give it real cores (a cpuset, or a VM) or keep dashboard use light |
 
 **Environments.** One environment per data dir, named after `Rails.env`:
 development, staging and production usually run on different machines,
@@ -114,8 +132,8 @@ every server start to `<data dir>/server.env` (0600) and never logged
 |---|---|
 | SMTP | `config.smtp`, else Action Mailer's `smtp_settings` when `delivery_method` is `:smtp` |
 | From | `config.mail_from`, else `ActionMailer::Base.default[:from]` |
-| S3 backups | `config.backup`, else `credentials.railwatch_server.backup` (`endpoint bucket access_key_id secret_access_key`, optional `region prefix interval_seconds`) |
-| Google sign-in | `config.google`, else `credentials.railwatch_server.google` (`client_id client_secret`) |
+| S3 backups | `config.backup`, else `credentials.railwatch_sidecar.backup` (`endpoint bucket access_key_id secret_access_key`, optional `region prefix interval_seconds`) |
+| Google sign-in | `config.google`, else `credentials.railwatch_sidecar.google` (`client_id client_secret`) |
 | retention | `config.retention = { detail_days:, core_days_max: }` |
 | alert delivery | `config.alert_delivery = false` records alerts without sending |
 | anything else | `config.server_env = { "RAILWATCH_NEW_ISSUES_PER_HOUR" => 50 }` |
@@ -133,10 +151,10 @@ serves only the dashboard.
 HTTP Basic, on and closed by default; or, with Basic off,
 `base_controller_class` (the proxy controller inherits from it, so your
 `before_action :require_admin` runs first). Past the gate, the visitor is
-named to the server by `Railwatch::Server.config.user`:
+named to the server by `Railwatch::Sidecar.config.user`:
 
 ```ruby
-Railwatch::Server.configure do |c|
+Railwatch::Sidecar.configure do |c|
   c.user = ->(controller) { u = controller.current_user; { email: u.email, name: u.name, role: u.admin? ? "admin" : "member" } }
 end
 ```
@@ -187,7 +205,7 @@ Everywhere else agent requests are forwarded without the visitor and the
 server answers 401 until the agent sends a token (`Authorization: Bearer
 rwp_...` from Settings -> Profile), which the proxy passes through
 unchanged; a token always wins over the signature, in development too.
-`config.agent_access = true` (or `RAILWATCH_SERVER_AGENT_ACCESS=1`) signs
+`config.agent_access = true` (or `RAILWATCH_SIDECAR_AGENT_ACCESS=1`) signs
 agent requests for whoever passes the gate in any environment: only behind
 a gate that authenticates people (`base_controller_class` with your login),
 since the agent then acts as them. `false` turns it off in development too.
@@ -200,7 +218,7 @@ browser ── /railwatch/* ──> Rails (gate) ──> ProxyController ── 
 Puma workers, jobs ── railwatch agent ── /ingest ─────────────────────────────────────┘
 ```
 
-- **Process.** `plugin :railwatch_server` spawns `railwatch serve` from
+- **Process.** `plugin :railwatch_sidecar` spawns `railwatch serve` from
   Puma's master after boot, in its own process group: a Ctrl-C reaches
   Puma, Puma drains, and only then is the server stopped. A supervisor
   thread checks every second and restarts a dead server with backoff
@@ -217,7 +235,7 @@ Puma workers, jobs ── railwatch agent ── /ingest ───────�
   and KILL past the deadline. `server.pid` records "server parent"; a
   server orphaned by a SIGKILLed Puma is stopped by the next start.
 - **Proxy.** `/railwatch/*` is a prepended route to
-  `Railwatch::Server::ProxyController`. It forwards the server's cookies
+  `Railwatch::Sidecar::ProxyController`. It forwards the server's cookies
   and Inertia headers, sets `Host`/`X-Forwarded-Proto`, sets
   `X-Forwarded-For` to the visitor's `request.remote_ip` (replacing any the
   browser sent; the server runs with `RAILWATCH_TRUST_PROXY`, so its per-IP

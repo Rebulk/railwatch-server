@@ -3,7 +3,7 @@
 require "minitest/autorun"
 require "tmpdir"
 require "socket"
-require "railwatch/server"
+require "railwatch/sidecar"
 
 # The supervisor against a fake `railwatch serve` that answers /up: a server
 # that stops answering is noticed, KILLed and restarted, once per state
@@ -26,14 +26,14 @@ class ProcessTest < Minitest::Test
     @binary = File.join(@dir, "railwatch")
     File.write(@binary, FAKE)
     File.chmod(0o755, @binary)
-    @config = Railwatch::Server::Configuration.new
+    @config = Railwatch::Sidecar::Configuration.new
     @config.port = TCPServer.open("127.0.0.1", 0) { _1.addr[1] }
     @config.data_dir = File.join(@dir, "data")
     FileUtils.mkdir_p(@config.data_dir)
     @lines = []
-    @server = Railwatch::Server::Process.new(config: @config, data_dir: Railwatch::Server::DataDir.new(@config.data_dir), binary: @binary,
+    @server = Railwatch::Sidecar::Process.new(config: @config, data_dir: Railwatch::Sidecar::DataDir.new(@config.data_dir), binary: @binary,
                                              log: ->(m) { @lines << m })
-    @timeouts = %i[HANG_TIMEOUT PROBE_TIMEOUT].to_h { [ _1, Railwatch::Server::Process.const_get(_1) ] }
+    @timeouts = %i[HANG_TIMEOUT PROBE_TIMEOUT].to_h { [ _1, Railwatch::Sidecar::Process.const_get(_1) ] }
     set_timeouts(HANG_TIMEOUT: 1, PROBE_TIMEOUT: 0.3)
   end
 
@@ -45,7 +45,7 @@ class ProcessTest < Minitest::Test
 
   def set_timeouts(**values)
     verbose, $VERBOSE = $VERBOSE, nil
-    values.each { |k, v| Railwatch::Server::Process.const_set(k, v) }
+    values.each { |k, v| Railwatch::Sidecar::Process.const_set(k, v) }
   ensure
     $VERBOSE = verbose
   end

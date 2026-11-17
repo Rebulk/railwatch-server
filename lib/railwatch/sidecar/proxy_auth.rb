@@ -5,7 +5,7 @@ require "json"
 require "openssl"
 
 module Railwatch
-  module Server
+  module Sidecar
     # The header the server trusts as "this request is user X with role Y"
     # (railwatch-rs web/proxy_auth.rs, `trusted_proxy_secret_file`):
     #

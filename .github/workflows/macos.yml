@@ -3,7 +3,7 @@
 # ad-hoc signed (Apple Silicon runs nothing
 # unsigned), run (version, then setup, serve and /up in a temp dir, and a
 # second serve on the same data dir relaying to the first), and packed into
-# railwatch-server-<version>-<platform>.gem.
+# railwatch-sidecar-<version>-<platform>.gem.
 #
 # Not a release: no Developer ID signature, no notarization (README,
 # "macOS"). Artifacts only.
@@ -18,7 +18,7 @@ on:
     branches: [main]
     paths:
       - .github/workflows/macos.yml
-      - lib/railwatch/server/version.rb
+      - lib/railwatch/sidecar/version.rb
 
 permissions:
   contents: read
@@ -158,18 +158,18 @@ jobs:
         run: |
           set -euxo pipefail
           mkdir -p pkg
-          RAILWATCH_SERVER_PLATFORM=${{ matrix.platform }} gem build railwatch-server.gemspec -o "pkg/railwatch-server-${{ matrix.platform }}.gem"
-          gem specification "pkg/railwatch-server-${{ matrix.platform }}.gem" platform
-          tar -xOf "pkg/railwatch-server-${{ matrix.platform }}.gem" data.tar.gz | tar -tzv | grep "exe/${{ matrix.platform }}/railwatch"
+          RAILWATCH_SIDECAR_PLATFORM=${{ matrix.platform }} gem build railwatch-sidecar.gemspec -o "pkg/railwatch-sidecar-${{ matrix.platform }}.gem"
+          gem specification "pkg/railwatch-sidecar-${{ matrix.platform }}.gem" platform
+          tar -xOf "pkg/railwatch-sidecar-${{ matrix.platform }}.gem" data.tar.gz | tar -tzv | grep "exe/${{ matrix.platform }}/railwatch"
           # Installed from the gem, the binary keeps its signature and runs.
-          gem install --local --ignore-dependencies --install-dir "$RUNNER_TEMP/gems" "pkg/railwatch-server-${{ matrix.platform }}.gem"
-          installed=$(ls -d "$RUNNER_TEMP"/gems/gems/railwatch-server-*)/exe/${{ matrix.platform }}/railwatch
+          gem install --local --ignore-dependencies --install-dir "$RUNNER_TEMP/gems" "pkg/railwatch-sidecar-${{ matrix.platform }}.gem"
+          installed=$(ls -d "$RUNNER_TEMP"/gems/gems/railwatch-sidecar-*)/exe/${{ matrix.platform }}/railwatch
           codesign --verify "$installed"
           "$installed" --version
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: railwatch-server-${{ matrix.platform }}
+          name: railwatch-sidecar-${{ matrix.platform }}
           path: |
             exe/${{ matrix.platform }}/railwatch
-            pkg/railwatch-server-${{ matrix.platform }}.gem
+            pkg/railwatch-sidecar-${{ matrix.platform }}.gem
           if-no-files-found: error

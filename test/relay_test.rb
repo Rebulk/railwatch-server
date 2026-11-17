@@ -3,11 +3,11 @@
 require "minitest/autorun"
 require "socket"
 require "tempfile"
-require_relative "../lib/railwatch/server/relay"
+require_relative "../lib/railwatch/sidecar/relay"
 
 class RelayTest < Minitest::Test
   def test_one_thread_moves_bytes_both_ways_for_many_connections
-    relay = Railwatch::Server::Relay.new(max_live: 50)
+    relay = Railwatch::Sidecar::Relay.new(max_live: 50)
     threads_before = Thread.list.size
     pairs = Array.new(40) do
       browser, proxy_side = UNIXSocket.pair
@@ -27,7 +27,7 @@ class RelayTest < Minitest::Test
   end
 
   def test_a_large_message_arrives_whole_through_a_slow_reader
-    relay = Railwatch::Server::Relay.new(max_live: 1)
+    relay = Railwatch::Sidecar::Relay.new(max_live: 1)
     browser, proxy_side = UNIXSocket.pair
     server_side, server = UNIXSocket.pair
     relay.add(proxy_side, server_side)
@@ -39,7 +39,7 @@ class RelayTest < Minitest::Test
   end
 
   def test_when_one_side_closes_what_it_sent_is_delivered_and_both_close
-    relay = Railwatch::Server::Relay.new(max_live: 1)
+    relay = Railwatch::Sidecar::Relay.new(max_live: 1)
     browser, proxy_side = UNIXSocket.pair
     server_side, server = UNIXSocket.pair
     relay.add(proxy_side, server_side)
@@ -51,7 +51,7 @@ class RelayTest < Minitest::Test
   end
 
   def test_past_max_a_connection_is_refused_and_left_to_the_caller
-    relay = Railwatch::Server::Relay.new(max_live: 1)
+    relay = Railwatch::Sidecar::Relay.new(max_live: 1)
     a, b = UNIXSocket.pair
     c, d = UNIXSocket.pair
     assert relay.add(a, b)
@@ -60,7 +60,7 @@ class RelayTest < Minitest::Test
   end
 
   def test_a_proxied_request_goes_to_the_server_and_its_response_comes_back_with_connection_close
-    relay = Railwatch::Server::Relay.new
+    relay = Railwatch::Sidecar::Relay.new
     browser, client = UNIXSocket.pair
     upstream, server = UNIXSocket.pair
     body = Tempfile.create("upload").tap { |f| f.write("b" * 200_000); f.rewind }
@@ -79,7 +79,7 @@ class RelayTest < Minitest::Test
   end
 
   def test_a_response_head_split_across_reads_is_rewritten_whole
-    relay = Railwatch::Server::Relay.new
+    relay = Railwatch::Sidecar::Relay.new
     browser, client = UNIXSocket.pair
     upstream, server = UNIXSocket.pair
     relay.proxy(client, upstream, request: "GET / HTTP/1.1\r\n\r\n")
@@ -93,7 +93,7 @@ class RelayTest < Minitest::Test
   end
 
   def test_a_server_that_closes_without_answering_is_a_502
-    relay = Railwatch::Server::Relay.new
+    relay = Railwatch::Sidecar::Relay.new
     browser, client = UNIXSocket.pair
     upstream, server = UNIXSocket.pair
     relay.proxy(client, upstream, request: "GET / HTTP/1.1\r\n\r\n")
@@ -104,7 +104,7 @@ class RelayTest < Minitest::Test
   end
 
   def test_a_server_that_does_not_start_answering_in_time_is_a_504
-    relay = Railwatch::Server::Relay.new(first_byte_timeout: 0.3)
+    relay = Railwatch::Sidecar::Relay.new(first_byte_timeout: 0.3)
     browser, client = UNIXSocket.pair
     upstream, _server = UNIXSocket.pair
     relay.proxy(client, upstream, request: "GET / HTTP/1.1\r\n\r\n")
@@ -115,7 +115,7 @@ class RelayTest < Minitest::Test
   end
 
   def test_a_response_that_goes_quiet_is_cut_off_after_the_idle_timeout
-    relay = Railwatch::Server::Relay.new(idle_timeout: 0.3)
+    relay = Railwatch::Sidecar::Relay.new(idle_timeout: 0.3)
     browser, client = UNIXSocket.pair
     upstream, server = UNIXSocket.pair
     relay.proxy(client, upstream, request: "GET / HTTP/1.1\r\n\r\n")
@@ -126,7 +126,7 @@ class RelayTest < Minitest::Test
   end
 
   def test_live_and_proxied_connections_have_their_own_caps
-    relay = Railwatch::Server::Relay.new(max_live: 1, max_proxied: 2)
+    relay = Railwatch::Sidecar::Relay.new(max_live: 1, max_proxied: 2)
     assert relay.add(*UNIXSocket.pair)
     assert relay.full?(:live)
     refute relay.full?(:proxied)

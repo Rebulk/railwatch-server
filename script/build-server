@@ -17,7 +17,7 @@ platforms=${*:-x86_64-linux aarch64-linux x86_64-darwin arm64-darwin}
 src=$(cd "$src" && pwd)
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 IMAGE=ghcr.io/rust-cross/cargo-zigbuild@sha256:d8313491ec5798de0633fdc1c5753761bff79967bea69076020dc78121b2cca8
-cache=${BUILD_CACHE:-/var/tmp/railwatch-server-build}
+cache=${BUILD_CACHE:-/var/tmp/railwatch-sidecar-build}
 mkdir -p "$cache"/{registry,git,target,home}
 
 [ -f "$src/frontend/dist/.vite/manifest.json" ] || { echo "build-server: $src/frontend/dist is missing (bin/build with SKIP_CARGO=1)" >&2; exit 1; }

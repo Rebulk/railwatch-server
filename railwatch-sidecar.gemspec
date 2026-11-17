@@ -1,13 +1,13 @@
 # frozen_string_literal: true
 
-require_relative "lib/railwatch/server/version"
+require_relative "lib/railwatch/sidecar/version"
 
 Gem::Specification.new do |spec|
-  spec.name = "railwatch-server"
-  spec.version = Railwatch::Server::VERSION
+  spec.name = "railwatch-sidecar"
+  spec.version = Railwatch::Sidecar::VERSION
   spec.authors = [ "Rebulk" ]
   spec.summary = "The Railwatch server, bundled: the full Railwatch dashboard at /railwatch in your Rails app, run as its own process"
-  spec.homepage = "https://github.com/Rebulk/railwatch-server"
+  spec.homepage = "https://github.com/Rebulk/railwatch-sidecar"
   # This gem ships the Railwatch server binary (NOTICE). The railwatch agent it
   # depends on is MIT and a separate gem.
   spec.license = "FSL-1.1-ALv2"
@@ -16,10 +16,10 @@ Gem::Specification.new do |spec|
   spec.metadata["railwatch_rs_source"] = "https://github.com/Rebulk/railwatch-rs"
 
   spec.files = Dir["{app,lib}/**/*", "LICENSE", "NOTICE", "README.md"]
-  # `rake gem:<platform>` sets RAILWATCH_SERVER_PLATFORM to build the
+  # `rake gem:<platform>` sets RAILWATCH_SIDECAR_PLATFORM to build the
   # platform gem with that platform's binary; without it, the plain "ruby"
   # gem, which has none and tells the user how to get one (Binary.path).
-  if (platform = ENV["RAILWATCH_SERVER_PLATFORM"])
+  if (platform = ENV["RAILWATCH_SIDECAR_PLATFORM"])
     spec.platform = platform
     spec.files += [ "exe/#{platform}/railwatch" ]
   end

@@ -4,7 +4,7 @@ require "minitest/autorun"
 require "tmpdir"
 require "active_support/core_ext/securerandom"
 require "active_support/core_ext/object/blank"
-require "railwatch/server"
+require "railwatch/sidecar"
 
 # Provisioning against fake `railwatch setup`s: one that hangs is KILLed at
 # setup_timeout with everything it started, the app is told why, and the
@@ -32,7 +32,7 @@ class ProvisionTest < Minitest::Test
     File.chmod(0o755, @binary)
     @pids = File.join(@dir, "pids")
     FileUtils.mkdir_p(@pids)
-    @data = Railwatch::Server::DataDir.new(File.join(@dir, "data"))
+    @data = Railwatch::Sidecar::DataDir.new(File.join(@dir, "data"))
   end
 
   def teardown
@@ -52,9 +52,9 @@ class ProvisionTest < Minitest::Test
 
   def test_a_setup_that_hangs_is_killed_with_its_children_and_the_boot_goes_on
     started = monotonic
-    error = assert_raises(Railwatch::Server::Error) { provision("hang") }
+    error = assert_raises(Railwatch::Sidecar::Error) { provision("hang") }
     assert_operator monotonic - started, :<, 3, "the boot waits setup_timeout, not for the setup"
-    assert_match(/did not finish within 0.5s \(RAILWATCH_SERVER_SETUP_TIMEOUT\); KILLED it/, error.message)
+    assert_match(/did not finish within 0.5s \(RAILWATCH_SIDECAR_SETUP_TIMEOUT\); KILLED it/, error.message)
     assert_match(/boots without the Railwatch server/, error.message)
     refute process?(File.read(File.join(@pids, "setup.pid")).to_i), "the setup is gone"
     refute process?(File.read(File.join(@pids, "child.pid")).to_i), "so is anything it started (its process group)"
@@ -62,7 +62,7 @@ class ProvisionTest < Minitest::Test
   end
 
   def test_a_setup_killed_halfway_leaves_nothing_that_blocks_the_next_start
-    error = assert_raises(Railwatch::Server::Error) { provision("half") }
+    error = assert_raises(Railwatch::Sidecar::Error) { provision("half") }
     assert_match(/it printed: creating the account/, error.message)
     refute @data.provisioned?
     refute @data.path.join("control.sqlite3").exist?, "its users would make every later setup refuse the dir"

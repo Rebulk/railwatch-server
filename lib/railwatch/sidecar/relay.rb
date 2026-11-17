@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 module Railwatch
-  module Server
+  module Sidecar
     # Sockets the proxy has taken from Puma, moved by one thread per app
     # process with IO.select instead of a Puma thread (or two threads) per
     # connection. Two kinds:
@@ -47,7 +47,7 @@ module Railwatch
           @mutex.synchronize do
             @current = nil unless @pid == ::Process.pid
             @pid = ::Process.pid
-            config = Railwatch::Server.config
+            config = Railwatch::Sidecar.config
             @current ||= new(max_live: config.max_live_connections, max_proxied: config.max_proxied_requests,
                              first_byte_timeout: config.proxy_first_byte_timeout, idle_timeout: config.proxy_idle_timeout)
           end
@@ -125,7 +125,7 @@ module Railwatch
         return if @thread&.alive?
 
         @thread = Thread.new { run }
-        @thread.name = "railwatch-server-relay"
+        @thread.name = "railwatch-sidecar-relay"
         @thread.report_on_exception = false
       end
 
@@ -150,7 +150,7 @@ module Railwatch
           expire if timed
         end
       rescue StandardError => e
-        warn("[railwatch-server] relay stopped: #{e.class}: #{e.message}")
+        warn("[railwatch-sidecar] relay stopped: #{e.class}: #{e.message}")
         @mutex.synchronize do
           @sides.each_key { |io| io.close rescue nil }.clear
           @pairs.clear
@@ -240,7 +240,7 @@ module Railwatch
         return close_pair(pair) unless pair.kind == :proxied && pair.head && @mutex.synchronize { @pairs.include?(pair) }
 
         message = "The Railwatch server #{why}. Its log is in the app's storage/railwatch/<env>/server.log.\n"
-        warn("[railwatch-server] dashboard request: #{status}: the server #{why}")
+        warn("[railwatch-sidecar] dashboard request: #{status}: the server #{why}")
         pair.head = nil
         pair.active_at = monotonic
         pair.right.eof = true
@@ -262,7 +262,7 @@ module Railwatch
           if pair.head && now - pair.started_at > @first_byte_timeout
             fail_pair(pair, 504, "did not answer within #{@first_byte_timeout} s (proxy_first_byte_timeout)")
           elsif !pair.head && now - pair.active_at > @idle_timeout
-            warn("[railwatch-server] dashboard request: nothing moved for #{@idle_timeout} s (proxy_idle_timeout); closing it")
+            warn("[railwatch-sidecar] dashboard request: nothing moved for #{@idle_timeout} s (proxy_idle_timeout); closing it")
             close_pair(pair)
           end
         end

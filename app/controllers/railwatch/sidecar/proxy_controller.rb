@@ -4,7 +4,7 @@ require "net/http"
 require "socket"
 
 module Railwatch
-  module Server
+  module Sidecar
     # /railwatch/* in the app, forwarded to the bundled server on loopback.
     #
     # The gate is the railwatch gem's, so one setting covers the dashboard
@@ -38,8 +38,8 @@ module Railwatch
       class Upstream
         def initialize(request, headers, port:)
           @http = Net::HTTP.new("127.0.0.1", port)
-          @http.open_timeout = Railwatch::Server.config.proxy_connect_timeout
-          @http.read_timeout = Railwatch::Server.config.proxy_first_byte_timeout
+          @http.open_timeout = Railwatch::Sidecar.config.proxy_connect_timeout
+          @http.read_timeout = Railwatch::Sidecar.config.proxy_first_byte_timeout
           @http.max_retries = 0
           # Byte-transparent: the browser's Accept-Encoding, or identity. A
           # request built without one gets Net::HTTP's gzip default and its
@@ -131,12 +131,12 @@ module Railwatch
       def protect_against_forgery? = false
 
       def forward
-        if (error = Railwatch::Server.provision_error) && !Railwatch::Server.data_dir.provisioned?
+        if (error = Railwatch::Sidecar.provision_error) && !Railwatch::Sidecar.data_dir.provisioned?
           return unavailable("not provisioned: #{error.message}")
         end
 
-        secret = Railwatch::Server.data_dir.proxy_secret
-        return unavailable("not provisioned yet (no #{Railwatch::Server.data_dir.proxy_secret_file})") unless secret
+        secret = Railwatch::Sidecar.data_dir.proxy_secret
+        return unavailable("not provisioned yet (no #{Railwatch::Sidecar.data_dir.proxy_secret_file})") unless secret
 
         if websocket?
           tunnel(secret)
@@ -163,10 +163,10 @@ module Railwatch
         request_http_basic_authentication("Railwatch")
       end
 
-      # Who the server should see: Railwatch::Server.config.user when the app
+      # Who the server should see: Railwatch::Sidecar.config.user when the app
       # names its user, else the HTTP Basic user, else one operator.
       def visitor
-        given = Railwatch::Server.config.user&.call(self)
+        given = Railwatch::Sidecar.config.user&.call(self)
         return given.to_h.transform_keys(&:to_sym).reverse_merge(role: "admin") if given
 
         basic_user = ActionController::HttpAuthentication::Basic.user_name_and_password(request).first if request.authorization.to_s.start_with?("Basic ")
@@ -182,7 +182,7 @@ module Railwatch
 
       # The server's MCP endpoint and JSON API: what an AI agent calls.
       def agent_request?
-        mount = Railwatch::Server.config.normalized_mount_path
+        mount = Railwatch::Sidecar.config.normalized_mount_path
         rest = mount == "/" ? request.path : request.path.delete_prefix(mount)
         rest == "/mcp" || rest.start_with?("/api/")
       end
@@ -193,10 +193,10 @@ module Railwatch
       # the LAN) to a local host name (a page on another site that rebinds
       # its own name to 127.0.0.1 arrives with that name as Host).
       def agent_access?
-        setting = Railwatch::Server.config.agent_access
+        setting = Railwatch::Sidecar.config.agent_access
         return setting unless setting.nil?
 
-        Railwatch::Server.config.environment == "development" && request.local? && LOCAL_HOSTS.include?(request.host)
+        Railwatch::Sidecar.config.environment == "development" && request.local? && LOCAL_HOSTS.include?(request.host)
       end
 
       # An agent's own token, which the server checks: sent on as it came,
@@ -248,7 +248,7 @@ module Railwatch
       def hand_off(secret)
         relay = Relay.current
         if relay.full?(:proxied)
-          Rails.logger.warn("[railwatch-server] #{relay.max(:proxied)} dashboard requests in flight (max_proxied_requests); refusing another")
+          Rails.logger.warn("[railwatch-sidecar] #{relay.max(:proxied)} dashboard requests in flight (max_proxied_requests); refusing another")
           response.headers["Retry-After"] = "1"
           return render(plain: "The dashboard is busy (#{relay.max(:proxied)} requests in flight in this process). Try again in a moment.",
                         status: :service_unavailable)
@@ -264,7 +264,7 @@ module Railwatch
       end
 
       def connect
-        TCPSocket.new("127.0.0.1", Railwatch::Server.config.port, connect_timeout: Railwatch::Server.config.proxy_connect_timeout)
+        TCPSocket.new("127.0.0.1", Railwatch::Sidecar.config.port, connect_timeout: Railwatch::Sidecar.config.proxy_connect_timeout)
       rescue IO::TimeoutError => e
         raise Errno::ETIMEDOUT, e.message
       end
@@ -298,7 +298,7 @@ module Railwatch
       # server writes it (Upstream#each), so a large export never sits whole
       # in this process. The request body is streamed too, from rack.input.
       def stream(secret)
-        upstream = Upstream.new(request, upstream_headers(secret), port: Railwatch::Server.config.port)
+        upstream = Upstream.new(request, upstream_headers(secret), port: Railwatch::Sidecar.config.port)
         response = upstream.start
         response.each_header do |name, _|
           next if HOP_BY_HOP.include?(name) || Relay::APP_OWNED.include?(name)
@@ -329,7 +329,7 @@ module Railwatch
 
         relay = Relay.current
         if relay.full?(:live)
-          Rails.logger.warn("[railwatch-server] #{relay.max(:live)} live-channel connections open (max_live_connections); refusing another")
+          Rails.logger.warn("[railwatch-sidecar] #{relay.max(:live)} live-channel connections open (max_live_connections); refusing another")
           return head(:service_unavailable)
         end
         upstream = connect
@@ -352,10 +352,10 @@ module Railwatch
       end
 
       def unavailable(why)
-        message = "The Railwatch server is not answering on 127.0.0.1:#{Railwatch::Server.config.port} (#{why}). " \
-                  "It is started by `plugin :railwatch_server` in config/puma.rb or `bin/rails railwatch_server:start`; " \
-                  "its log is #{Railwatch::Server.data_dir.log_file}."
-        Rails.logger.error("[railwatch-server] #{message}")
+        message = "The Railwatch server is not answering on 127.0.0.1:#{Railwatch::Sidecar.config.port} (#{why}). " \
+                  "It is started by `plugin :railwatch_sidecar` in config/puma.rb or `bin/rails railwatch_sidecar:start`; " \
+                  "its log is #{Railwatch::Sidecar.data_dir.log_file}."
+        Rails.logger.error("[railwatch-sidecar] #{message}")
         render plain: message, status: :service_unavailable
       end
     end

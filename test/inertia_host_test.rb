@@ -6,8 +6,8 @@ require "rails"
 require "action_controller/railtie"
 require "action_dispatch/middleware/flash"
 require "action_controller/test_case"
-require "railwatch/server"
-require_relative "../app/controllers/railwatch/server/proxy_controller"
+require "railwatch/sidecar"
+require_relative "../app/controllers/railwatch/sidecar/proxy_controller"
 
 require "inertia_rails"
 require "inertia_rails/extensions/request"
@@ -26,7 +26,7 @@ class InertiaHostTest < Minitest::Test
     InertiaRails.configure { |c| c.version = "the-apps-version" }
     @dir = Dir.mktmpdir
     File.write(File.join(@dir, "proxy_secret"), "s" * 64)
-    Railwatch::Server.configure { |c| c.data_dir = @dir }
+    Railwatch::Sidecar.configure { |c| c.data_dir = @dir }
   end
 
   def teardown
@@ -42,13 +42,13 @@ class InertiaHostTest < Minitest::Test
     env = Rack::MockRequest.env_for("http://shop.example/railwatch/dashboard",
                                     "HTTP_X_INERTIA" => "true", "HTTP_X_INERTIA_VERSION" => "the-servers-version")
     env["rack.session"] = ActionController::TestSession.new
-    env["action_dispatch.request.path_parameters"] = { controller: "railwatch/server/proxy", action: "forward" }
+    env["action_dispatch.request.path_parameters"] = { controller: "railwatch/sidecar/proxy", action: "forward" }
     app.call(env)
   end
 
   def test_a_dashboard_click_is_not_turned_into_a_full_page_load
-    controller = Class.new(Railwatch::Server::ProxyController) do
-      def self.name = "Railwatch::Server::ProxyController"
+    controller = Class.new(Railwatch::Sidecar::ProxyController) do
+      def self.name = "Railwatch::Sidecar::ProxyController"
       private def hand_off(_secret) = render(json: { component: "dashboard/index" })
       private def hijackable? = true
     end

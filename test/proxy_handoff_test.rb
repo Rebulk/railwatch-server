@@ -2,19 +2,19 @@
 
 require "minitest/autorun"
 require "socket"
-require "railwatch/server"
+require "railwatch/sidecar"
 
 class ProxyHandoffTest < Minitest::Test
-  Handoff = Railwatch::Server::ProxyHandoff
+  Handoff = Railwatch::Sidecar::ProxyHandoff
 
   def setup
-    @relay = Railwatch::Server::Relay.new
-    Railwatch::Server::Relay.instance_variable_set(:@current, @relay)
-    Railwatch::Server::Relay.instance_variable_set(:@pid, Process.pid)
+    @relay = Railwatch::Sidecar::Relay.new
+    Railwatch::Sidecar::Relay.instance_variable_set(:@current, @relay)
+    Railwatch::Sidecar::Relay.instance_variable_set(:@pid, Process.pid)
   end
 
   def teardown
-    Railwatch::Server::Relay.instance_variable_set(:@current, nil)
+    Railwatch::Sidecar::Relay.instance_variable_set(:@current, nil)
   end
 
   def test_the_socket_goes_to_the_relay_with_the_apps_cookies_and_the_app_server_sends_nothing

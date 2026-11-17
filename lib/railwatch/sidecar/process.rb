@@ -4,7 +4,7 @@ require "net/http"
 require "socket"
 
 module Railwatch
-  module Server
+  module Sidecar
     # One `railwatch serve` child: started, watched, restarted with backoff
     # when it dies, stopped with TERM and a deadline. The Puma plugin drives
     # it from Puma's master; nothing here runs in a worker.
@@ -233,7 +233,7 @@ module Railwatch
         renice
       end
 
-      # Below the app's own priority (RAILWATCH_SERVER_NICE), so a busy
+      # Below the app's own priority (RAILWATCH_SIDECAR_NICE), so a busy
       # dashboard, which can keep every core busy, takes CPU from the app's
       # requests last. Linux keeps a priority per thread: set on the child's
       # process group (every thread in it) right after the spawn, and again

@@ -3,7 +3,7 @@
 require "fileutils"
 
 module Railwatch
-  module Server
+  module Sidecar
     # The server's own settings that come from the app: SMTP for alert and
     # digest email, S3 backups, Google sign-in, retention, whether alerts are
     # sent. Written to `<data dir>/server.env` (0600, replaced atomically on
@@ -11,12 +11,12 @@ module Railwatch
     # are neither on the server's command line nor in its environment, and
     # never in a log: only the names of what was set are logged.
     #
-    # Each comes from Railwatch::Server.config first, then from the app:
+    # Each comes from Railwatch::Sidecar.config first, then from the app:
     #
     #   smtp      config.action_mailer.smtp_settings, when delivery_method is :smtp
     #   mail_from ActionMailer::Base.default[:from]
-    #   backup    credentials.railwatch_server.backup
-    #   google    credentials.railwatch_server.google
+    #   backup    credentials.railwatch_sidecar.backup
+    #   google    credentials.railwatch_sidecar.google
     #
     # Anything the server reads that has no setting here goes in
     # config.server_env ("RAILWATCH_..." => value). The server's own process
@@ -66,7 +66,7 @@ module Railwatch
 
       # Writes the file the server reads; returns its path.
       def write!(path)
-        body = +"# Written by railwatch-server on every start from the app's settings. Do not edit.\n"
+        body = +"# Written by railwatch-sidecar on every start from the app's settings. Do not edit.\n"
         env.each do |key, value|
           raise Invalid, "#{key}: not a variable name" unless key.match?(/\A[A-Za-z_][A-Za-z0-9_]*\z/)
           raise Invalid, "#{key}: a value cannot contain a line break" if value.match?(/[\r\n]/)
@@ -122,7 +122,10 @@ module Railwatch
       end
 
       def credential(name)
-        value = @rails&.credentials&.dig(:railwatch_server, name)
+        value = @rails&.credentials&.dig(:railwatch_sidecar, name)
+        if value.nil? && (value = @rails&.credentials&.dig(:railwatch_server, name))
+          Railwatch::Sidecar.deprecated("credentials.railwatch_server.#{name} is now credentials.railwatch_sidecar.#{name}")
+        end
         value ? symbolize(value) : nil
       rescue StandardError
         # Unreadable credentials (no master key on this machine) are the app's
@@ -150,7 +153,7 @@ module Railwatch
 
       def backup_env(b)
         missing = %i[endpoint bucket access_key_id secret_access_key].reject { b[_1] }
-        raise Invalid, "backup needs #{missing.join(', ')} (Railwatch::Server.config.backup or credentials.railwatch_server.backup)" if missing.any?
+        raise Invalid, "backup needs #{missing.join(', ')} (Railwatch::Sidecar.config.backup or credentials.railwatch_sidecar.backup)" if missing.any?
 
         {
           "RAILWATCH_BACKUP_S3_ENDPOINT" => b[:endpoint],
