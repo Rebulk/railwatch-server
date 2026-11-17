@@ -20,7 +20,7 @@ def check(name, ok, detail = nil)
 end
 
 data = File.join(Dir.mktmpdir("rws-precompile-", "/var/tmp"), "storage/railwatch/production")
-env = { "RAILS_ENV" => "production", "SECRET_KEY_BASE_DUMMY" => "1", "RAILWATCH_SIDECAR_DATA_DIR" => data, "RAILWATCH_SIDECAR_ENABLED" => nil }
+env = { "RAILS_ENV" => "production", "SECRET_KEY_BASE_DUMMY" => "1", "RAILWATCH_SIDECAR_DATA_DIR" => data, "RAILWATCH_SIDECAR_ENABLED" => nil, "RAILWATCH_SERVER_ENABLED" => nil }
 out, status = Open3.capture2e(env, "bin/rails", "assets:precompile", chdir: APP)
 check("assets:precompile succeeds", status.success?, out.lines.last(3).join.strip)
 check("nothing written under storage/railwatch", !File.exist?(File.dirname(data)), Dir.glob("#{data}/**/*").map { File.basename(_1) }.join(" "))

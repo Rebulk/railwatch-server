@@ -104,7 +104,9 @@ class ProxyControllerTest < Minitest::Test
   end
 
   def test_agent_access_reads_the_environment
-    saved = ENV["RAILWATCH_SIDECAR_AGENT_ACCESS"]
+    names = %w[RAILWATCH_SIDECAR_AGENT_ACCESS RAILWATCH_SERVER_AGENT_ACCESS]
+    saved = names.to_h { [ _1, ENV[_1] ] }
+    ENV.delete("RAILWATCH_SERVER_AGENT_ACCESS")
     ENV["RAILWATCH_SIDECAR_AGENT_ACCESS"] = "true"
     assert_equal true, Railwatch::Sidecar::Configuration.new.agent_access
     ENV["RAILWATCH_SIDECAR_AGENT_ACCESS"] = "0"
@@ -112,7 +114,7 @@ class ProxyControllerTest < Minitest::Test
     ENV.delete("RAILWATCH_SIDECAR_AGENT_ACCESS")
     assert_nil Railwatch::Sidecar::Configuration.new.agent_access
   ensure
-    ENV["RAILWATCH_SIDECAR_AGENT_ACCESS"] = saved
+    saved.each { |k, v| ENV[k] = v }
   end
 
   def test_agent_requests_are_recognised_under_a_root_mount
