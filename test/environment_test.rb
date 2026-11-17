@@ -5,7 +5,7 @@ require "tmpdir"
 require "rake"
 require "active_support/core_ext/securerandom"
 require "active_support/core_ext/object/blank"
-require "railwatch/server"
+require "railwatch/sidecar"
 
 class EnvironmentTest < Minitest::Test
   def with_env(vars)
@@ -18,21 +18,21 @@ class EnvironmentTest < Minitest::Test
 
   def test_each_environment_gets_its_own_data_dir
     %w[development staging production].each do |env|
-      with_env("RAILS_ENV" => env, "RAILWATCH_SERVER_DATA_DIR" => nil) do
-        assert_equal File.expand_path("storage/railwatch/#{env}"), Railwatch::Server::Configuration.new.data_path.to_s
+      with_env("RAILS_ENV" => env, "RAILWATCH_SIDECAR_DATA_DIR" => nil) do
+        assert_equal File.expand_path("storage/railwatch/#{env}"), Railwatch::Sidecar::Configuration.new.data_path.to_s
       end
     end
   end
 
   def test_off_in_the_test_environment_unless_asked_for
-    with_env("RAILS_ENV" => "test", "RAILWATCH_SERVER_ENABLED" => nil) do
-      refute Railwatch::Server::Configuration.new.enabled
+    with_env("RAILS_ENV" => "test", "RAILWATCH_SIDECAR_ENABLED" => nil) do
+      refute Railwatch::Sidecar::Configuration.new.enabled
     end
-    with_env("RAILS_ENV" => "test", "RAILWATCH_SERVER_ENABLED" => "true") do
-      assert Railwatch::Server::Configuration.new.enabled
+    with_env("RAILS_ENV" => "test", "RAILWATCH_SIDECAR_ENABLED" => "true") do
+      assert Railwatch::Sidecar::Configuration.new.enabled
     end
-    with_env("RAILS_ENV" => "production", "RAILWATCH_SERVER_ENABLED" => nil) do
-      assert Railwatch::Server::Configuration.new.enabled
+    with_env("RAILS_ENV" => "production", "RAILWATCH_SIDECAR_ENABLED" => nil) do
+      assert Railwatch::Sidecar::Configuration.new.enabled
     end
   end
 
@@ -42,14 +42,14 @@ class EnvironmentTest < Minitest::Test
   def test_a_process_that_does_not_start_the_server_writes_no_data_dir
     Dir.mktmpdir do |dir|
       data = File.join(dir, "storage/railwatch/production")
-      with_env("RAILS_ENV" => "production", "RAILWATCH_SERVER_DATA_DIR" => data, "SECRET_KEY_BASE_DUMMY" => "1", "RAILWATCH_SERVER_ENABLED" => nil) do
-        Railwatch::Server.instance_variable_set(:@config, nil)
-        refute Railwatch::Server.serving?
-        assert_equal :building, Railwatch::Server.wire_agent!
-        with_env("SECRET_KEY_BASE_DUMMY" => nil) { assert_equal :not_provisioned, Railwatch::Server.wire_agent! }
+      with_env("RAILS_ENV" => "production", "RAILWATCH_SIDECAR_DATA_DIR" => data, "SECRET_KEY_BASE_DUMMY" => "1", "RAILWATCH_SIDECAR_ENABLED" => nil) do
+        Railwatch::Sidecar.instance_variable_set(:@config, nil)
+        refute Railwatch::Sidecar.serving?
+        assert_equal :building, Railwatch::Sidecar.wire_agent!
+        with_env("SECRET_KEY_BASE_DUMMY" => nil) { assert_equal :not_provisioned, Railwatch::Sidecar.wire_agent! }
         refute File.exist?(File.join(dir, "storage"))
       ensure
-        Railwatch::Server.instance_variable_set(:@config, nil)
+        Railwatch::Sidecar.instance_variable_set(:@config, nil)
       end
     end
   end
@@ -59,18 +59,18 @@ class EnvironmentTest < Minitest::Test
   # still says its agent is not wired.
   def test_the_database_step_before_the_first_server_does_not_warn_and_a_job_worker_does
     Dir.mktmpdir do |dir|
-      with_env("RAILS_ENV" => "production", "RAILWATCH_SERVER_DATA_DIR" => File.join(dir, "railwatch"), "SECRET_KEY_BASE_DUMMY" => nil,
-               "RAILWATCH_SERVER_ENABLED" => nil) do
-        Railwatch::Server.instance_variable_set(:@config, nil)
+      with_env("RAILS_ENV" => "production", "RAILWATCH_SIDECAR_DATA_DIR" => File.join(dir, "railwatch"), "SECRET_KEY_BASE_DUMMY" => nil,
+               "RAILWATCH_SIDECAR_ENABLED" => nil) do
+        Railwatch::Sidecar.instance_variable_set(:@config, nil)
         saved = Rake.application.top_level_tasks.dup
         Rake.application.top_level_tasks.replace(%w[db:prepare])
-        assert_equal :building, Railwatch::Server.wire_agent!
+        assert_equal :building, Railwatch::Sidecar.wire_agent!
         Rake.application.top_level_tasks.replace(%w[solid_queue:start])
-        assert_equal :not_provisioned, Railwatch::Server.wire_agent!
+        assert_equal :not_provisioned, Railwatch::Sidecar.wire_agent!
         refute File.exist?(File.join(dir, "railwatch"))
       ensure
         Rake.application.top_level_tasks.replace(saved) if saved
-        Railwatch::Server.instance_variable_set(:@config, nil)
+        Railwatch::Sidecar.instance_variable_set(:@config, nil)
       end
     end
   end
@@ -83,14 +83,14 @@ class EnvironmentTest < Minitest::Test
       count = File.join(dir, "runs")
       File.write(binary, "#!/bin/sh\necho x >> #{count}\necho 'setup broke' >&2\nexit 3\n")
       File.chmod(0o755, binary)
-      with_env("RAILS_ENV" => "production", "RAILWATCH_SERVER_DATA_DIR" => File.join(dir, "data"), "RAILWATCH_SERVER_BINARY" => binary) do
-        Railwatch::Server.instance_variable_set(:@config, nil)
-        2.times { assert_raises(Railwatch::Server::Error) { Railwatch::Server.provision!(log: ->(_) {}) } }
+      with_env("RAILS_ENV" => "production", "RAILWATCH_SIDECAR_DATA_DIR" => File.join(dir, "data"), "RAILWATCH_SIDECAR_BINARY" => binary) do
+        Railwatch::Sidecar.instance_variable_set(:@config, nil)
+        2.times { assert_raises(Railwatch::Sidecar::Error) { Railwatch::Sidecar.provision!(log: ->(_) {}) } }
         assert_equal 1, File.readlines(count).size
-        assert_match(/setup failed \(exit 3\): setup broke/, Railwatch::Server.provision_error.message)
+        assert_match(/setup failed \(exit 3\): setup broke/, Railwatch::Sidecar.provision_error.message)
       ensure
-        Railwatch::Server.instance_variable_set(:@config, nil)
-        Railwatch::Server.instance_variable_set(:@provision_error, nil)
+        Railwatch::Sidecar.instance_variable_set(:@config, nil)
+        Railwatch::Sidecar.instance_variable_set(:@provision_error, nil)
       end
     end
   end
@@ -98,14 +98,14 @@ class EnvironmentTest < Minitest::Test
   # Thruster and kamal-proxy drop a response that hasn't started after 30 s;
   # the proxy's own 504 must come first to reach the visitor.
   def test_the_proxy_gives_up_before_the_front_proxies_do
-    with_env("RAILWATCH_SERVER_PROXY_FIRST_BYTE_TIMEOUT" => nil) do
-      assert_operator Railwatch::Server::Configuration.new.proxy_first_byte_timeout, :<, 30
+    with_env("RAILWATCH_SIDECAR_PROXY_FIRST_BYTE_TIMEOUT" => nil) do
+      assert_operator Railwatch::Sidecar::Configuration.new.proxy_first_byte_timeout, :<, 30
     end
   end
 
   def test_a_data_dir_remembers_its_environment
     Dir.mktmpdir do |dir|
-      data = Railwatch::Server::DataDir.new(dir)
+      data = Railwatch::Sidecar::DataDir.new(dir)
       assert_nil data.environment
       File.write(File.join(dir, "environment"), "staging\n")
       assert_equal "staging", data.environment

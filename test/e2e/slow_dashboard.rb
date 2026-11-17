@@ -1,6 +1,6 @@
 # Slow dashboard pages must not take the app's Puma threads.
 #
-# Boots the app (default /var/tmp/rws-fresh, any app with railwatch-server in
+# Boots the app (default /var/tmp/rws-fresh, any app with railwatch-sidecar in
 # its Gemfile) under Puma, 1 worker x 3 threads, without the plugin, in front
 # of a fake Railwatch server on loopback whose /railwatch/slow pages take
 # DELAY seconds. Then opens SLOW concurrent slow dashboard loads and times
@@ -118,9 +118,9 @@ File.write(puma_config, <<~RUBY)
 RUBY
 log = File.join(data, "puma.log")
 env = {
-  "RAILWATCH_SERVER_ENABLED" => "true", "RAILWATCH_SERVER_PORT" => SIDECAR_PORT.to_s, "RAILWATCH_SERVER_DATA_DIR" => data,
-  "RAILWATCH_SERVER_WIRE_AGENT" => "false", "RAILWATCH_ENABLED" => "false", "WEB_CONCURRENCY" => nil, "RAILS_MAX_THREADS" => nil,
-  "RAILWATCH_SERVER_MAX_PROXIED_REQUESTS" => ENV.fetch("RAILWATCH_SERVER_MAX_PROXIED_REQUESTS", "16")
+  "RAILWATCH_SIDECAR_ENABLED" => "true", "RAILWATCH_SIDECAR_PORT" => SIDECAR_PORT.to_s, "RAILWATCH_SIDECAR_DATA_DIR" => data,
+  "RAILWATCH_SIDECAR_WIRE_AGENT" => "false", "RAILWATCH_ENABLED" => "false", "WEB_CONCURRENCY" => nil, "RAILS_MAX_THREADS" => nil,
+  "RAILWATCH_SIDECAR_MAX_PROXIED_REQUESTS" => ENV.fetch("RAILWATCH_SIDECAR_MAX_PROXIED_REQUESTS", "16")
 }
 fake = FakeServer.new(SIDECAR_PORT)
 puma = spawn(env, "bundle", "exec", "puma", "-C", puma_config, chdir: APP, out: log, err: log, pgroup: true)
@@ -173,7 +173,7 @@ begin
   check("the server's cookie comes back", r.get_fields("set-cookie").to_a.any? { _1.start_with?("_railwatch_session=server") })
   check("the response says Connection: close", r["connection"].to_s.casecmp?("close"), r["connection"])
 
-  cap = Integer(env["RAILWATCH_SERVER_MAX_PROXIED_REQUESTS"])
+  cap = Integer(env["RAILWATCH_SIDECAR_MAX_PROXIED_REQUESTS"])
   slow = Array.new(cap) { Thread.new { http(:Get, "/railwatch/slow") } }
   sleep 0.5
   r, t = timed { http(:Get, "/railwatch/page") }

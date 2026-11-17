@@ -1,6 +1,6 @@
-railwatch-server bundles the Railwatch server.
+railwatch-sidecar bundles the Railwatch server.
 
-The platform gems of railwatch-server (x86_64-linux, aarch64-linux,
+The platform gems of railwatch-sidecar (x86_64-linux, aarch64-linux,
 x86_64-darwin, arm64-darwin) contain exe/<platform>/railwatch, a compiled
 build of Railwatch (railwatch-rs), https://github.com/Rebulk/railwatch-rs,
 which is under the Functional Source License, Version 1.1, ALv2 Future
@@ -8,7 +8,7 @@ License (FSL-1.1-ALv2). This gem's own Ruby code is under the same license;
 see LICENSE.
 
 The source of the bundled binary is the railwatch-rs commit
-named in lib/railwatch/server/version.rb (RAILWATCH_RS), unmodified. The
+named in lib/railwatch/sidecar/version.rb (RAILWATCH_RS), unmodified. The
 running server also links to its source on every response (the Link header and /source).
 Third-party code compiled into the binary keeps its own licenses, listed in
 railwatch-rs's THIRD-PARTY-LICENSES.

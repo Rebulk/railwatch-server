@@ -27,7 +27,7 @@ end
 def start(name, port)
   sh("docker", "run", "-d", "--name", name, "--hostname", name, "-p", "127.0.0.1:#{port}:3000",
      "-v", "#{VOL}:/rails/storage", "-v", "#{PROBES}:/probes", "-e", "PROBE_LOG=/probes/#{name}.jsonl",
-     "-e", "RAILWATCH_SERVER_URL=http://127.0.0.1:#{port}", *ENV.fetch("EXTRA_ENV", "").split.flat_map { ["-e", _1] }, "--memory", "768m", IMAGE)
+     "-e", "RAILWATCH_SIDECAR_URL=http://127.0.0.1:#{port}", *ENV.fetch("EXTRA_ENV", "").split.flat_map { ["-e", _1] }, "--memory", "768m", IMAGE)
 end
 
 def up?(port)

@@ -2,8 +2,8 @@
 
 require "minitest/autorun"
 require "action_controller"
-require "railwatch/server"
-require_relative "../app/controllers/railwatch/server/proxy_controller"
+require "railwatch/sidecar"
+require_relative "../app/controllers/railwatch/sidecar/proxy_controller"
 
 # What the server is told about the visitor. It runs with
 # RAILWATCH_TRUST_PROXY and keys its per-IP limits (sign-in, MCP) on the
@@ -13,7 +13,7 @@ class ProxyControllerTest < Minitest::Test
   def forwarded_for(remote_addr, xff = nil)
     env = Rack::MockRequest.env_for("http://shop.example/railwatch/dashboard", "REMOTE_ADDR" => remote_addr)
     env["HTTP_X_FORWARDED_FOR"] = xff if xff
-    controller = Railwatch::Server::ProxyController.new
+    controller = Railwatch::Sidecar::ProxyController.new
     controller.set_request!(ActionDispatch::Request.new(env))
     controller.send(:upstream_headers, "s" * 64)["X-Forwarded-For"]
   end
@@ -30,8 +30,8 @@ class ProxyControllerTest < Minitest::Test
   end
 
   def test_the_server_is_trusted_with_x_forwarded_for
-    config = Railwatch::Server::Configuration.new
-    env = Railwatch::Server::Process.new(config: config, data_dir: Railwatch::Server::DataDir.new("/nonexistent"), binary: "railwatch", log: ->(_) {}).env
+    config = Railwatch::Sidecar::Configuration.new
+    env = Railwatch::Sidecar::Process.new(config: config, data_dir: Railwatch::Sidecar::DataDir.new("/nonexistent"), binary: "railwatch", log: ->(_) {}).env
     assert_equal "true", env["RAILWATCH_TRUST_PROXY"]
     assert_equal "127.0.0.1:#{config.port}", env["RAILWATCH_BIND"], "only the app (and its agents) can reach it"
   end
@@ -39,7 +39,7 @@ class ProxyControllerTest < Minitest::Test
   # With trust_proxy and an https url the server sends HSTS; the host is
   # the app's, so only the app's own policy (if any) reaches the browser.
   def test_the_servers_hsts_does_not_become_the_apps
-    relay = Railwatch::Server::Relay.new
+    relay = Railwatch::Sidecar::Relay.new
     head = relay.send(:response_head, "HTTP/1.1 200 OK\r\nStrict-Transport-Security: max-age=31536000\r\nContent-Length: 0",
                       [ [ "strict-transport-security", "max-age=63072000; includeSubDomains" ] ])
     assert_equal "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nstrict-transport-security: max-age=63072000; includeSubDomains\r\nconnection: close\r\n\r\n", head
@@ -48,20 +48,20 @@ class ProxyControllerTest < Minitest::Test
   # What an AI agent's request (<mount>/mcp, <mount>/api/...) carries to
   # the server: the visitor's signed header only where agent access is on.
   def agent_headers(path, env: "development", remote_addr: "127.0.0.1", host: "localhost:3000", authorization: nil, setting: nil)
-    config = Railwatch::Server.config
+    config = Railwatch::Sidecar.config
     saved = [ config.agent_access, ENV["RAILS_ENV"] ]
     config.agent_access = setting
     ENV["RAILS_ENV"] = env
     rack = Rack::MockRequest.env_for("http://#{host}#{path}", "REMOTE_ADDR" => remote_addr)
     rack["HTTP_AUTHORIZATION"] = authorization if authorization
-    controller = Railwatch::Server::ProxyController.new
+    controller = Railwatch::Sidecar::ProxyController.new
     controller.set_request!(ActionDispatch::Request.new(rack))
     controller.send(:upstream_headers, "s" * 64)
   ensure
     config.agent_access, ENV["RAILS_ENV"] = saved
   end
 
-  def signed?(headers) = headers.key?(Railwatch::Server::ProxyAuth::HEADER)
+  def signed?(headers) = headers.key?(Railwatch::Sidecar::ProxyAuth::HEADER)
 
   def test_an_agent_on_this_machine_in_development_needs_no_token
     assert signed?(agent_headers("/railwatch/mcp")), "MCP from localhost in development"
@@ -104,19 +104,21 @@ class ProxyControllerTest < Minitest::Test
   end
 
   def test_agent_access_reads_the_environment
-    saved = ENV["RAILWATCH_SERVER_AGENT_ACCESS"]
-    ENV["RAILWATCH_SERVER_AGENT_ACCESS"] = "true"
-    assert_equal true, Railwatch::Server::Configuration.new.agent_access
-    ENV["RAILWATCH_SERVER_AGENT_ACCESS"] = "0"
-    assert_equal false, Railwatch::Server::Configuration.new.agent_access
+    names = %w[RAILWATCH_SIDECAR_AGENT_ACCESS RAILWATCH_SERVER_AGENT_ACCESS]
+    saved = names.to_h { [ _1, ENV[_1] ] }
     ENV.delete("RAILWATCH_SERVER_AGENT_ACCESS")
-    assert_nil Railwatch::Server::Configuration.new.agent_access
+    ENV["RAILWATCH_SIDECAR_AGENT_ACCESS"] = "true"
+    assert_equal true, Railwatch::Sidecar::Configuration.new.agent_access
+    ENV["RAILWATCH_SIDECAR_AGENT_ACCESS"] = "0"
+    assert_equal false, Railwatch::Sidecar::Configuration.new.agent_access
+    ENV.delete("RAILWATCH_SIDECAR_AGENT_ACCESS")
+    assert_nil Railwatch::Sidecar::Configuration.new.agent_access
   ensure
-    ENV["RAILWATCH_SERVER_AGENT_ACCESS"] = saved
+    saved.each { |k, v| ENV[k] = v }
   end
 
   def test_agent_requests_are_recognised_under_a_root_mount
-    config = Railwatch::Server.config
+    config = Railwatch::Sidecar.config
     saved = config.mount_path
     config.mount_path = "/"
     assert signed?(agent_headers("/mcp")), "development, from this machine"
@@ -133,7 +135,7 @@ class ProxyControllerTest < Minitest::Test
     config.http_basic_auth_enabled, config.http_basic_auth_user, config.http_basic_auth_password = true, "ops", "secret"
     rack = Rack::MockRequest.env_for("https://shop.example#{path}")
     rack["HTTP_AUTHORIZATION"] = authorization if authorization
-    controller = Railwatch::Server::ProxyController.new
+    controller = Railwatch::Sidecar::ProxyController.new
     controller.set_request!(ActionDispatch::Request.new(rack))
     controller.set_response!(ActionDispatch::Response.new)
     controller.send(:authenticate_by_http_basic)

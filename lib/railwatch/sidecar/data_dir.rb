@@ -5,7 +5,7 @@ require "open3"
 require "securerandom"
 
 module Railwatch
-  module Server
+  module Sidecar
     # The server's data directory under the app (storage/railwatch by
     # default) and what this gem keeps in it next to the server's own files:
     #
@@ -74,7 +74,7 @@ module Railwatch
         File.open(path.join(SETUP_LOCK), File::RDWR | File::CREAT, 0o600) do |lock|
           until lock.flock(File::LOCK_EX | File::LOCK_NB)
             if monotonic >= deadline
-              raise Error, "another process has been provisioning #{path} for #{timeout}s (RAILWATCH_SERVER_SETUP_TIMEOUT); " \
+              raise Error, "another process has been provisioning #{path} for #{timeout}s (RAILWATCH_SIDECAR_SETUP_TIMEOUT); " \
                            "this one boots without the Railwatch server and tries again at its next start"
             end
             sleep 0.05
@@ -114,7 +114,7 @@ module Railwatch
 
         (path.children - before).each { FileUtils.rm_rf(_1) }
         unless status
-          raise Error, "railwatch setup did not finish within #{timeout}s (RAILWATCH_SERVER_SETUP_TIMEOUT); KILLED it. " \
+          raise Error, "railwatch setup did not finish within #{timeout}s (RAILWATCH_SIDECAR_SETUP_TIMEOUT); KILLED it. " \
                        "The app boots without the Railwatch server: the agent is not wired and the dashboard is unavailable. " \
                        "The next start runs setup again#{"; it printed: #{err.strip.lines.last(5).join.strip}" if err.strip != ""}"
         end
