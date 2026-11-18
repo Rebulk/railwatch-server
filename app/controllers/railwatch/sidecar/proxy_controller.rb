@@ -95,7 +95,10 @@ module Railwatch
       end
 
       # The server's cookies only; the app's own (its session) stay here.
-      FORWARDED_COOKIES = %w[_railwatch_session session_token account_id XSRF-TOKEN].freeze
+      # Not the server's generic session_token and account_id: an app may
+      # have cookies of those names, and a proxied visitor needs neither
+      # (the signed header names them, in the server's first account).
+      FORWARDED_COOKIES = %w[_railwatch_session XSRF-TOKEN].freeze
       FORWARDED_HEADERS = %w[
         Accept Accept-Encoding Accept-Language Content-Type Origin Referer User-Agent
         X-Inertia X-Inertia-Version X-Inertia-Partial-Component X-Inertia-Partial-Data X-Inertia-Partial-Except
@@ -106,7 +109,24 @@ module Railwatch
       # Host names that only reach this machine (agent_access?).
       LOCAL_HOSTS = %w[localhost 127.0.0.1 ::1 [::1]].freeze
 
+      # A forwarded header name or value with one of these would end the
+      # header, or the request, on the server's socket (a cookie is
+      # percent-decoded, so %0D%0A in one planted on the app's domain is a
+      # real line break): a second request, signed for the visitor.
+      UNSAFE_HEADER_BYTES = /[\r\n\0]/
+      # A forwarded cookie's value is percent-decoded too: one with a pair
+      # delimiter in it ("x; session_token=chosen") would add cookies the
+      # proxy never forwards. The server's own values (a signed session, a
+      # CSRF token) never contain these, so such a cookie is dropped.
+      # Line breaks and NUL are not dropped here: UNSAFE_HEADER_BYTES refuses
+      # the whole request (400), which is the louder answer to a smuggling
+      # attempt.
+      COOKIE_VALUE_DELIMITERS = /[;, \t]/
+
+      class UnsafeHeader < StandardError; end
+
       skip_forgery_protection if respond_to?(:skip_forgery_protection)
+      before_action :refuse_ungated
       before_action :authenticate_by_http_basic
 
       # An app on inertia_rails has its controller module in every
@@ -145,9 +165,23 @@ module Railwatch
         else
           stream(secret)
         end
+      rescue UnsafeHeader => e
+        logger&.warn("[railwatch-sidecar] refused a dashboard request: its #{e.message} header has a line break or NUL byte")
+        render plain: "Bad request: a header or cookie for the dashboard contains a line break or NUL byte.", status: :bad_request
       end
 
       private
+
+      # Outside development the dashboard needs a gate: HTTP Basic, or the
+      # app's own controller (Railwatch::Sidecar.dashboard_gated?). Without
+      # one every visitor would be let through, MCP included.
+      def refuse_ungated
+        return if Railwatch::Sidecar.config.environment == "development" || Railwatch::Sidecar.dashboard_gated?
+
+        message = Railwatch::Sidecar.ungated_message
+        logger&.error("[railwatch-sidecar] #{message}")
+        render plain: message, status: :service_unavailable
+      end
 
       # An agent's Bearer token takes the one Authorization header Basic would
       # need, so a request to MCP or the API with one is left to the server,
@@ -164,7 +198,8 @@ module Railwatch
       end
 
       # Who the server should see: Railwatch::Sidecar.config.user when the app
-      # names its user, else the HTTP Basic user, else one operator.
+      # names its user, else the HTTP Basic user, else one operator (both
+      # members).
       def visitor
         given = Railwatch::Sidecar.config.user&.call(self)
         return given.to_h.transform_keys(&:to_sym).reverse_merge(role: "admin") if given
@@ -172,7 +207,9 @@ module Railwatch
         basic_user = ActionController::HttpAuthentication::Basic.user_name_and_password(request).first if request.authorization.to_s.start_with?("Basic ")
         # Decoded base64 comes back binary; parameterize needs a real encoding.
         name = basic_user.to_s.dup.force_encoding(Encoding::UTF_8).scrub.presence || "Operator"
-        { email: "#{name.parameterize.presence || 'operator'}@railwatch.invalid", name: name, role: "admin" }
+        # A member: whoever passes a shared password is not known to be an
+        # admin. config.user names admins.
+        { email: "#{name.parameterize.presence || 'operator'}@railwatch.invalid", name: name, role: "member" }
       end
 
       def signed_header(secret)
@@ -206,12 +243,30 @@ module Railwatch
         value if agent_request? && value.start_with?("Bearer ")
       end
 
+      # Every header that goes to the server, on every path: refused whole
+      # (UnsafeHeader, a 400) rather than cleaned, before a byte is written.
+      def checked(headers)
+        headers.each do |name, value|
+          raise UnsafeHeader, name.to_s.gsub(UNSAFE_HEADER_BYTES, "?") if name.to_s.match?(UNSAFE_HEADER_BYTES) || value.to_s.match?(UNSAFE_HEADER_BYTES)
+        end
+      end
+
+      # The request line and headers as the server reads them (the hijacked
+      # request and the live channel's handshake).
+      def http_head(request_line, headers)
+        "#{request_line}\r\n#{checked(headers).map { |k, v| "#{k}: #{v}\r\n" }.join}\r\n"
+      end
+
       def upstream_headers(secret)
         headers = FORWARDED_HEADERS.each_with_object({}) do |name, h|
           value = request.headers[name]
           h[name] = value if value
         end
-        cookies = request.cookies.slice(*FORWARDED_COOKIES)
+        # A line break or NUL keeps the cookie, so `checked` refuses the
+        # whole request; any other pair delimiter just drops it.
+        cookies = request.cookies.slice(*FORWARDED_COOKIES).reject do |_, v|
+          v.to_s.match?(COOKIE_VALUE_DELIMITERS) && !v.to_s.match?(UNSAFE_HEADER_BYTES)
+        end
         headers["Cookie"] = cookies.map { |k, v| "#{k}=#{v}" }.join("; ") if cookies.any?
         # The server compares Origin with Host, and builds absolute URLs (an
         # Inertia version-mismatch reload) from Host and X-Forwarded-Proto.
@@ -254,12 +309,13 @@ module Railwatch
                         status: :service_unavailable)
         end
 
-        upstream = connect
         request_head, body = upstream_request(secret)
+        upstream = connect
         request.env[ProxyHandoff::ENV_KEY] = ProxyHandoff::Handoff.new(upstream, request_head, body)
         head :ok
       rescue SystemCallError, IOError => e
         upstream&.close rescue nil
+        body&.close rescue nil
         unavailable("#{e.class}: #{e.message}")
       end
 
@@ -278,7 +334,6 @@ module Railwatch
         input = request.body
         input.rewind if input.respond_to?(:rewind)
         length = request.content_length.to_i
-        body = input.is_a?(::File) ? input.dup : nil
         # The browser's HTTP version: an HTTP/1.0 client (nginx's default
         # upstream protocol) can't read a chunked response, and the server
         # doesn't send one to an HTTP/1.0 request.
@@ -287,8 +342,8 @@ module Railwatch
         headers["Accept-Encoding"] = request.headers["Accept-Encoding"].presence || "identity"
         headers["Content-Length"] = length.to_s if length.positive? || request.content_length
         headers["Connection"] = "close"
-        head = "#{request.request_method} #{request.fullpath} #{version}\r\n" \
-               "#{headers.map { |k, v| "#{k}: #{v.to_s.delete("\r\n")}\r\n" }.join}\r\n".b
+        head = http_head("#{request.request_method} #{request.fullpath} #{version}", headers).b
+        body = input.is_a?(::File) ? input.dup : nil
         head << input.read.to_s.b if body.nil? && length.positive?
         [ head, body ]
       end
@@ -298,7 +353,7 @@ module Railwatch
       # server writes it (Upstream#each), so a large export never sits whole
       # in this process. The request body is streamed too, from rack.input.
       def stream(secret)
-        upstream = Upstream.new(request, upstream_headers(secret), port: Railwatch::Sidecar.config.port)
+        upstream = Upstream.new(request, checked(upstream_headers(secret)), port: Railwatch::Sidecar.config.port)
         response = upstream.start
         response.each_header do |name, _|
           next if HOP_BY_HOP.include?(name) || Relay::APP_OWNED.include?(name)
@@ -332,7 +387,6 @@ module Railwatch
           Rails.logger.warn("[railwatch-sidecar] #{relay.max(:live)} live-channel connections open (max_live_connections); refusing another")
           return head(:service_unavailable)
         end
-        upstream = connect
         handshake = upstream_headers(secret).merge(
           "Connection" => "Upgrade", "Upgrade" => "websocket",
           "Sec-WebSocket-Key" => request.headers["Sec-WebSocket-Key"],
@@ -340,7 +394,9 @@ module Railwatch
           "Sec-WebSocket-Protocol" => request.headers["Sec-WebSocket-Protocol"],
           "Sec-WebSocket-Extensions" => request.headers["Sec-WebSocket-Extensions"]
         ).compact
-        upstream.write("GET #{request.fullpath} HTTP/1.1\r\n#{handshake.map { |k, v| "#{k}: #{v}\r\n" }.join}\r\n")
+        head = http_head("GET #{request.fullpath} HTTP/1.1", handshake)
+        upstream = connect
+        upstream.write(head)
         client = hijack.call
         unless relay.add(client, upstream)
           [ client, upstream ].each { |io| io.close rescue nil }

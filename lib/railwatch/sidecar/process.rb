@@ -59,6 +59,21 @@ module Railwatch
           # (and never passes the browser's on), so the server's per-IP
           # limits (sign-in, MCP) see visitors, not the app. The agents post
           # /ingest on loopback without one and are keyed on 127.0.0.1.
+          #
+          # Any other process on this host can reach 127.0.0.1 too and send
+          # its own X-Forwarded-For (a Unix socket in the 0700 data dir would
+          # shut it out, but railwatch-rs v0.2.17 binds TCP only: RAILWATCH_BIND
+          # takes no unix: path and LISTEN_FDS only TCP listeners). What that
+          # buys it: the address the per-IP limits count and the session row
+          # records, and X-Forwarded-Proto on its own responses' links. Never
+          # who it is: identity is the HMAC-signed header, whose key is in
+          # the 0700 data dir, or a session or API token. So it can dodge a
+          # per-IP limit (the per-email sign-in limit and the per-token API
+          # limit still hold, and the only password user has a random one
+          # nobody knows), or fill one visitor's bucket for a few minutes.
+          # Without trust_proxy every visitor and agent would share one
+          # bucket and one 256-connection cap (127.0.0.1), and MCP links
+          # behind TLS would say http.
           "RAILWATCH_TRUST_PROXY" => "true",
           # A second server on this data dir (the new container of a deploy,
           # which has its own loopback) answers on its own port at once and
@@ -115,6 +130,7 @@ module Railwatch
         # data dir. Ours waits on serve.lock and takes over when that one
         # exits; meanwhile every agent here reports to it.
         @standby = up?
+        make_data_dir_private
         log = File.open(@data_dir.log_file, "a")
         @log_offset_at_spawn = log.size
         @relay_log_offset = nil
@@ -266,6 +282,15 @@ module Railwatch
       rescue Settings::Invalid => e
         @log.call("Railwatch server settings NOT applied: #{e.message}")
         Settings.new(Configuration.new, rails: nil).write!(@data_dir.settings_file.to_s)
+      end
+
+      # Loud, not fatal: a data dir owned by another user (a volume) can't be
+      # chmodded by this one, and the server still has to run.
+      def make_data_dir_private
+        @data_dir.make_private!
+      rescue Errno::EPERM => e
+        @log.call("#{@data_dir.path} could NOT be made private (0700, server.log 0600): #{e.message}. It holds the dashboard's " \
+                  "HMAC key and the telemetry; chown it to this user or tighten it by hand")
       end
 
       def write_pid_file

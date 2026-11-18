@@ -50,6 +50,26 @@ module Railwatch
         config.enabled
       end
 
+      # Whether the dashboard has a gate in front of it: HTTP Basic on, or
+      # the app's own base controller (base_controller_class set to
+      # something other than ActionController::Base). The railwatch gem's
+      # own answer when it has one (dashboard_gate_configured?).
+      def dashboard_gated?
+        gem = Railwatch.config
+        return gem.dashboard_gate_configured? if gem.respond_to?(:dashboard_gate_configured?)
+
+        default = defined?(Railwatch::Configuration::DEFAULT_BASE_CONTROLLER) ? Railwatch::Configuration::DEFAULT_BASE_CONTROLLER : "ActionController::Base"
+        gem.http_basic_auth_enabled || gem.base_controller_class.to_s.delete_prefix("::") != default
+      end
+
+      def ungated_message
+        "The Railwatch dashboard at #{config.normalized_mount_path} has no gate, so it is not served in #{config.environment}: " \
+          "HTTP Basic is off (RAILWATCH_HTTP_BASIC_AUTH_ENABLED=false) and Railwatch.config.base_controller_class is " \
+          "ActionController::Base, which would let every visitor in as a Railwatch user, MCP included. Turn HTTP Basic back on " \
+          "(Railwatch.config.http_basic_auth_user and _password), or set base_controller_class to a controller of your app " \
+          "that signs people in (its before_actions run first)."
+      end
+
       # Whether the app reports somewhere of its own choosing, in which case
       # the agent is left alone: a token set (RAILWATCH_TOKEN or the
       # initializer).

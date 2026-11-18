@@ -6,6 +6,27 @@ and MCP included), behind your app's own login, with no server to install.
 The server runs as **its own process** next to the app, started by Puma's
 master. It never runs inside a Puma worker.
 
+## Upgrading: security changes (unreleased)
+
+- **A dashboard without a gate is no longer served outside development.**
+  With HTTP Basic off (`RAILWATCH_HTTP_BASIC_AUTH_ENABLED=false`) and
+  `Railwatch.config.base_controller_class` left at `ActionController::Base`,
+  every visitor got in as a Railwatch user, MCP included. Now `/railwatch`
+  answers 503 with a message saying so, and boot logs the same as an error.
+  Give it a gate: turn HTTP Basic back on (`http_basic_auth_user` and
+  `http_basic_auth_password`), or set `base_controller_class` to a
+  controller of your app that signs people in. Development is unchanged.
+- **Without `Railwatch::Sidecar.config.user`, visitors are members, not
+  admins.** Name your admins with `config.user` (below) to keep admin
+  rights (settings, members, integrations) in the dashboard.
+- A forwarded header or cookie with a line break or NUL byte is refused with
+  400 instead of being sent to the server.
+- Only the server's own cookies (`_railwatch_session`, `XSRF-TOKEN`) are
+  forwarded; an app cookie named `session_token` or `account_id` stays in
+  the app.
+- The data dir is set to 0700 and `server.log` to 0600 on every start, also
+  when they already existed.
+
 ## Coming from railwatch-server
 
 This gem was called `railwatch-server` until 0.2.0. Replace the gem in your
@@ -150,7 +171,10 @@ serves only the dashboard.
 **Who the server sees.** The dashboard's gate is the `railwatch` gem's:
 HTTP Basic, on and closed by default; or, with Basic off,
 `base_controller_class` (the proxy controller inherits from it, so your
-`before_action :require_admin` runs first). Past the gate, the visitor is
+`before_action :require_admin` runs first). Outside development there must
+be one of the two: with Basic off and `base_controller_class` left at
+`ActionController::Base` the dashboard answers 503 and boot logs an error.
+Past the gate, the visitor is
 named to the server by `Railwatch::Sidecar.config.user`:
 
 ```ruby
@@ -159,7 +183,8 @@ Railwatch::Sidecar.configure do |c|
 end
 ```
 
-Without it, the HTTP Basic user name (or "Operator") is an admin. Users are
+Without it, the HTTP Basic user name (or "Operator") is a member; name
+admins with `config.user`. Users are
 created in the server on first sight. Nobody signs in to the server itself.
 
 ## AI agents
@@ -235,8 +260,11 @@ Puma workers, jobs ── railwatch agent ── /ingest ───────�
   and KILL past the deadline. `server.pid` records "server parent"; a
   server orphaned by a SIGKILLed Puma is stopped by the next start.
 - **Proxy.** `/railwatch/*` is a prepended route to
-  `Railwatch::Sidecar::ProxyController`. It forwards the server's cookies
-  and Inertia headers, sets `Host`/`X-Forwarded-Proto`, sets
+  `Railwatch::Sidecar::ProxyController`. It forwards the server's own
+  cookies (`_railwatch_session`, `XSRF-TOKEN`) and Inertia headers,
+  refusing with 400 any header or cookie with a line break or NUL byte
+  (Rack percent-decodes cookies, so one planted on your domain could
+  otherwise end the request and start a second, signed one), sets `Host`/`X-Forwarded-Proto`, sets
   `X-Forwarded-For` to the visitor's `request.remote_ip` (replacing any the
   browser sent; the server runs with `RAILWATCH_TRUST_PROXY`, so its per-IP
   sign-in and MCP limits count visitors, not the app), adds the signed
@@ -284,7 +312,13 @@ Puma workers, jobs ── railwatch agent ── /ingest ───────�
   `email, name, role, exp`; the server refuses a bad signature, an expired
   one, one valid for more than 5 minutes, and any role but admin/member
   (401, logged). It never falls back to "signed out". The server binds
-  loopback only, so nothing outside the host can reach it unproxied.
+  loopback only, so nothing outside the host can reach it unproxied. The
+  data dir is 0700 and `server.log` (proxied users' emails) 0600, enforced
+  on every start. Another process on the same host can reach the loopback
+  port and, because the server trusts `X-Forwarded-For` from it, choose
+  the address its per-IP limits count; it can't choose who it is (that
+  takes the HMAC key in the data dir, a session or a token). railwatch-rs
+  binds TCP only, so a Unix socket in the data dir is not an option yet.
 
 ## The server side (Rebulk/railwatch-rs)
 

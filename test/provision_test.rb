@@ -79,6 +79,28 @@ class ProvisionTest < Minitest::Test
     assert_equal "production", @data.environment
   end
 
+  def test_provisioning_an_existing_dir_makes_it_private
+    FileUtils.mkdir_p(@data.path)
+    File.chmod(0o755, @data.path)
+    provision("ok", timeout: 10)
+    assert_equal 0o700, File.stat(@data.path).mode & 0o777
+  end
+
+  # A volume another user owns (and lets this one write to) refuses the
+  # chmod. That must not stop the app booting: provisioning goes on, and
+  # the server's own start logs that the dir could not be made private.
+  def test_a_data_dir_this_user_may_not_chmod_still_provisions
+    FileUtils.mkdir_p(@data.path)
+    File.singleton_class.alias_method(:__chmod_for_test, :chmod)
+    File.define_singleton_method(:chmod) { |*a| a.first == 0o700 ? raise(Errno::EPERM, a.last.to_s) : __chmod_for_test(*a) }
+    done = provision("ok", timeout: 10)
+    assert_includes done, "proxy secret"
+    assert @data.provisioned?
+  ensure
+    File.singleton_class.alias_method(:chmod, :__chmod_for_test)
+    File.singleton_class.remove_method(:__chmod_for_test)
+  end
+
   def monotonic = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC)
 
   def process?(pid)
