@@ -6,7 +6,7 @@ and MCP included), behind your app's own login, with no server to install.
 The server runs as **its own process** next to the app, started by Puma's
 master. It never runs inside a Puma worker.
 
-## Upgrading: security changes (unreleased)
+## Upgrading to 0.2.1: security changes
 
 - **A dashboard without a gate is no longer served outside development.**
   With HTTP Basic off (`RAILWATCH_HTTP_BASIC_AUTH_ENABLED=false`) and
@@ -363,7 +363,7 @@ for Linux, and that image's MacOSX 11.3 SDK for both darwin targets. All
 four built here (2-3 min each, 4 jobs).
 
 **macOS: built natively, signed ad hoc, run in CI.** `.github/workflows/macos.yml`
-builds the frontend once on Linux, then on `macos-14` (arm64) and
+builds the frontend once on Linux, then on `macos-15` (arm64) and
 `macos-15-intel` (x86_64; GitHub retired the macos-13 runners) builds the
 server from the pinned railwatch-rs commit (`MACOSX_DEPLOYMENT_TARGET=11.0`, checked
 with `vtool`: minos 11.0), signs it `codesign -s -`, verifies the
