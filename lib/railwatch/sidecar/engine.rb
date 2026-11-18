@@ -17,6 +17,17 @@ module Railwatch
         end
       end
 
+      # Loud at boot, not only on the first visit: outside development a
+      # dashboard without a gate is refused (ProxyController#refuse_ungated).
+      # After the app's initializers, which set the gate.
+      initializer "railwatch_sidecar.gate", after: :load_config_initializers do
+        next unless Railwatch::Sidecar.enabled?
+        next if Railwatch::Sidecar.config.environment == "development" || Railwatch::Sidecar.dashboard_gated?
+
+        Rails.logger.error("[railwatch-sidecar] #{Railwatch::Sidecar.ungated_message}")
+        warn("[railwatch-sidecar] #{Railwatch::Sidecar.ungated_message}")
+      end
+
       # Outside every other middleware (the railwatch agent's included), so
       # the app's session and cookies are written before the browser's socket
       # is handed to the relay (ProxyHandoff).

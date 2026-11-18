@@ -79,6 +79,13 @@ class ProvisionTest < Minitest::Test
     assert_equal "production", @data.environment
   end
 
+  def test_provisioning_an_existing_dir_makes_it_private
+    FileUtils.mkdir_p(@data.path)
+    File.chmod(0o755, @data.path)
+    provision("ok", timeout: 10)
+    assert_equal 0o700, File.stat(@data.path).mode & 0o777
+  end
+
   def monotonic = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC)
 
   def process?(pid)

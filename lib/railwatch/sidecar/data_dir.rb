@@ -68,7 +68,7 @@ module Railwatch
       # provision (a bare `puma` in cluster mode) are not held up one after
       # another. Returns what it did, for the log.
       def provision!(binary:, env:, app_name:, env_name:, timeout:)
-        FileUtils.mkdir_p(path, mode: 0o700)
+        make_private!
         deadline = monotonic + timeout
         done = []
         File.open(path.join(SETUP_LOCK), File::RDWR | File::CREAT, 0o600) do |lock|
@@ -90,6 +90,15 @@ module Railwatch
           File.write(environment_file, "#{env_name}\n") unless environment_file.exist?
         end
         done
+      end
+
+      # 0700 on the directory and 0600 on server.log, also when they already
+      # exist (made by hand, an older gem or a loose umask): the dir holds the
+      # proxy's HMAC key and the databases, the log the proxied users' emails.
+      def make_private!
+        FileUtils.mkdir_p(path, mode: 0o700)
+        File.chmod(0o700, path)
+        File.open(log_file, File::WRONLY | File::APPEND | File::CREAT, 0o600) { _1.chmod(0o600) }
       end
 
       private

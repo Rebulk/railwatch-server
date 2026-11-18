@@ -99,6 +99,24 @@ class ProcessTest < Minitest::Test
     assert_equal [ own + 10, 19 ].min, File.read("/proc/#{@server.pid}/stat").split(") ").last.split[16].to_i
   end
 
+  # Finding 15: the data dir holds the proxy's HMAC key and the server's
+  # databases, and server.log the proxied users' emails. A dir made by
+  # hand, or by an older gem, under a loose umask is tightened on start.
+  def test_an_existing_data_dir_and_its_log_are_made_private_on_start
+    File.chmod(0o755, @config.data_dir)
+    log = File.join(@config.data_dir, "server.log")
+    File.write(log, "")
+    File.chmod(0o644, log)
+    @server.ensure_running
+    assert_equal 0o700, File.stat(@config.data_dir).mode & 0o777
+    assert_equal 0o600, File.stat(log).mode & 0o777
+  end
+
+  def test_a_new_server_log_is_private
+    @server.ensure_running
+    assert_equal 0o600, File.stat(File.join(@config.data_dir, "server.log")).mode & 0o777
+  end
+
   private
 
   def process?(pid)
