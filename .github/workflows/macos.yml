@@ -24,7 +24,7 @@ permissions:
   contents: read
 
 env:
-  RAILWATCH_RS_SHA: 95b0cbc32947141769182781a31c3fcdb693256d  # v0.2.17
+  RAILWATCH_RS_SHA: b24a46f3b1f4524aee6ede430379feea28b72ae7  # v0.3.3
   RUST_TOOLCHAIN: 1.99.1
   CARGO_BUILD_JOBS: "4"
 
@@ -104,6 +104,8 @@ jobs:
           # The macOS floor the binary is linked for (the zigbuild cross
           # build used the 11.3 SDK); checked below with vtool.
           MACOSX_DEPLOYMENT_TARGET: "11.0"
+          # What `railwatch version` reports, as railwatch-rs's release sets it.
+          RAILWATCH_VERSION: v0.3.3
           RUSTFLAGS: "--remap-path-prefix=${{ github.workspace }}/railwatch-rs=. -C strip=symbols"
         run: cargo build --release --locked -p railwatch-server --bin railwatch
       - name: place, ad-hoc sign, inspect

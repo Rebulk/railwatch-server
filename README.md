@@ -6,7 +6,7 @@ and MCP included), behind your app's own login, with no server to install.
 The server runs as **its own process** next to the app, started by Puma's
 master. It never runs inside a Puma worker.
 
-## Upgrading: security changes (unreleased)
+## Upgrading to 0.2.1: security changes
 
 - **A dashboard without a gate is no longer served outside development.**
   With HTTP Basic off (`RAILWATCH_HTTP_BASIC_AUTH_ENABLED=false`) and
