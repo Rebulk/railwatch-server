@@ -24,7 +24,7 @@ permissions:
   contents: read
 
 env:
-  RAILWATCH_RS_SHA: b24a46f3b1f4524aee6ede430379feea28b72ae7  # v0.3.3
+  RAILWATCH_RS_SHA: 5b93417c3ea500a3f4f95a6f3416d9b916664ea9  # v0.3.4
   RUST_TOOLCHAIN: 1.99.1
   CARGO_BUILD_JOBS: "4"
 
@@ -71,7 +71,7 @@ jobs:
       matrix:
         include:
           - platform: arm64-darwin
-            runner: macos-14
+            runner: macos-15
             arch: arm64
           # macos-13 runners are retired; macos-15-intel is GitHub's x86_64 image.
           - platform: x86_64-darwin
@@ -105,7 +105,7 @@ jobs:
           # build used the 11.3 SDK); checked below with vtool.
           MACOSX_DEPLOYMENT_TARGET: "11.0"
           # What `railwatch version` reports, as railwatch-rs's release sets it.
-          RAILWATCH_VERSION: v0.3.3
+          RAILWATCH_VERSION: v0.3.4
           RUSTFLAGS: "--remap-path-prefix=${{ github.workspace }}/railwatch-rs=. -C strip=symbols"
         run: cargo build --release --locked -p railwatch-server --bin railwatch
       - name: place, ad-hoc sign, inspect

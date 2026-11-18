@@ -363,7 +363,7 @@ for Linux, and that image's MacOSX 11.3 SDK for both darwin targets. All
 four built here (2-3 min each, 4 jobs).
 
 **macOS: built natively, signed ad hoc, run in CI.** `.github/workflows/macos.yml`
-builds the frontend once on Linux, then on `macos-14` (arm64) and
+builds the frontend once on Linux, then on `macos-15` (arm64) and
 `macos-15-intel` (x86_64; GitHub retired the macos-13 runners) builds the
 server from the pinned railwatch-rs commit (`MACOSX_DEPLOYMENT_TARGET=11.0`, checked
 with `vtool`: minos 11.0), signs it `codesign -s -`, verifies the
