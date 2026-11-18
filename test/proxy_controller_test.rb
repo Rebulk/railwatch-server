@@ -229,6 +229,20 @@ class ProxyControllerTest < Minitest::Test
     assert_equal "_railwatch_session=rw; XSRF-TOKEN=t", controller.send(:upstream_headers, "s" * 64)["Cookie"]
   end
 
+  # A forwarded value is percent-decoded: one that decodes to "x;
+  # session_token=chosen" would add a pair the proxy never forwards. Such a
+  # value is dropped, not passed on, so the Cookie the server reads holds
+  # only the server's own names.
+  def test_a_cookie_value_cannot_add_a_cookie_the_proxy_does_not_forward
+    env = Rack::MockRequest.env_for("http://shop.example/railwatch/dashboard",
+                                    "HTTP_COOKIE" => "_railwatch_session=x%3B%20session_token%3Dchosen%3B%20account_id%3D7; XSRF-TOKEN=t")
+    controller = Railwatch::Sidecar::ProxyController.new
+    controller.set_request!(ActionDispatch::Request.new(env))
+    cookie = controller.send(:upstream_headers, "s" * 64)["Cookie"]
+    assert_equal "XSRF-TOKEN=t", cookie
+    refute_match(/session_token|account_id/, cookie.to_s)
+  end
+
   # Finding 2: no gate (Basic off, base controller left at
   # ActionController::Base) made every visitor an admin outside
   # development. The dashboard refuses to be served then.

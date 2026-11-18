@@ -114,6 +114,14 @@ module Railwatch
       # percent-decoded, so %0D%0A in one planted on the app's domain is a
       # real line break): a second request, signed for the visitor.
       UNSAFE_HEADER_BYTES = /[\r\n\0]/
+      # A forwarded cookie's value is percent-decoded too: one with a pair
+      # delimiter in it ("x; session_token=chosen") would add cookies the
+      # proxy never forwards. The server's own values (a signed session, a
+      # CSRF token) never contain these, so such a cookie is dropped.
+      # Line breaks and NUL are not dropped here: UNSAFE_HEADER_BYTES refuses
+      # the whole request (400), which is the louder answer to a smuggling
+      # attempt.
+      COOKIE_VALUE_DELIMITERS = /[;, \t]/
 
       class UnsafeHeader < StandardError; end
 
@@ -254,7 +262,11 @@ module Railwatch
           value = request.headers[name]
           h[name] = value if value
         end
-        cookies = request.cookies.slice(*FORWARDED_COOKIES)
+        # A line break or NUL keeps the cookie, so `checked` refuses the
+        # whole request; any other pair delimiter just drops it.
+        cookies = request.cookies.slice(*FORWARDED_COOKIES).reject do |_, v|
+          v.to_s.match?(COOKIE_VALUE_DELIMITERS) && !v.to_s.match?(UNSAFE_HEADER_BYTES)
+        end
         headers["Cookie"] = cookies.map { |k, v| "#{k}=#{v}" }.join("; ") if cookies.any?
         # The server compares Origin with Host, and builds absolute URLs (an
         # Inertia version-mismatch reload) from Host and X-Forwarded-Proto.

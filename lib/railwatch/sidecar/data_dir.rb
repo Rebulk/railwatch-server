@@ -68,7 +68,7 @@ module Railwatch
       # provision (a bare `puma` in cluster mode) are not held up one after
       # another. Returns what it did, for the log.
       def provision!(binary:, env:, app_name:, env_name:, timeout:)
-        make_private!
+        try_make_private
         deadline = monotonic + timeout
         done = []
         File.open(path.join(SETUP_LOCK), File::RDWR | File::CREAT, 0o600) do |lock|
@@ -95,10 +95,22 @@ module Railwatch
       # 0700 on the directory and 0600 on server.log, also when they already
       # exist (made by hand, an older gem or a loose umask): the dir holds the
       # proxy's HMAC key and the databases, the log the proxied users' emails.
+      #
+      # A volume another user owns refuses the chmod (EPERM). That is not
+      # fatal here: provisioning still works in a dir this user may write,
+      # and the server's start (Process#make_data_dir_private) logs that the
+      # dir could not be made private. Raised only for the server to log.
       def make_private!
         FileUtils.mkdir_p(path, mode: 0o700)
         File.chmod(0o700, path)
         File.open(log_file, File::WRONLY | File::APPEND | File::CREAT, 0o600) { _1.chmod(0o600) }
+      end
+
+      def try_make_private
+        make_private!
+        true
+      rescue Errno::EPERM
+        false
       end
 
       private
