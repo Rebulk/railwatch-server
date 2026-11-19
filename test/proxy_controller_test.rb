@@ -340,17 +340,8 @@ class ProxyControllerTest < Minitest::Test
   end
 
   def test_without_a_named_user_the_visitor_is_a_member_not_an_admin
-    config = Railwatch::Sidecar.config
-    saved = config.user
-    config.user = nil
-    rack = Rack::MockRequest.env_for("https://shop.example/railwatch/dashboard")
-    rack["HTTP_AUTHORIZATION"] = "Basic #{["ops:secret"].pack("m0")}"
-    controller = Railwatch::Sidecar::ProxyController.new
-    controller.set_request!(ActionDispatch::Request.new(rack))
-    assert_equal "member", controller.send(:visitor)[:role]
-    config.user = ->(_) { { email: "ada@example.com", name: "Ada", role: "admin" } }
-    assert_equal "admin", controller.send(:visitor)[:role], "an app that names its admins still can"
-  ensure
-    config.user = saved
+    assert_equal "member", visitor_role(user: nil)
+    assert_equal "admin", visitor_role(user: ->(_) { { email: "ada@example.com", name: "Ada", role: "admin" } }),
+      "an app that names its admins still can"
   end
 end
