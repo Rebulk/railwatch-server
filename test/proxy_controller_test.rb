@@ -284,6 +284,61 @@ class ProxyControllerTest < Minitest::Test
     config.singleton_class.send(:remove_method, :dashboard_gate_configured?)
   end
 
+  def visitor_role(user:, default_role: nil)
+    config = Railwatch::Sidecar.config
+    gem = Railwatch.config
+    saved = [ config.user, gem.respond_to?(:dashboard_default_role) && gem.dashboard_default_role, ENV["RAILWATCH_DASHBOARD_DEFAULT_ROLE"] ]
+    config.user = user
+    ENV["RAILWATCH_DASHBOARD_DEFAULT_ROLE"] = default_role
+    gem.dashboard_default_role = default_role if gem.respond_to?(:dashboard_default_role=)
+    rack = Rack::MockRequest.env_for("https://shop.example/railwatch/dashboard")
+    rack["HTTP_AUTHORIZATION"] = "Basic #{["ops:secret"].pack("m0")}"
+    controller = Railwatch::Sidecar::ProxyController.new
+    controller.set_request!(ActionDispatch::Request.new(rack))
+    controller.send(:visitor)[:role]
+  ensure
+    config.user = saved[0]
+    gem.dashboard_default_role = saved[1] if gem.respond_to?(:dashboard_default_role=)
+    ENV["RAILWATCH_DASHBOARD_DEFAULT_ROLE"] = saved[2]
+  end
+
+  # GA review 2026-11-19, finding 7: `config.user` returning
+  # { email:, name: } made every visitor an admin.
+  def test_a_named_user_without_a_role_is_a_member_not_an_admin
+    assert_equal "member", visitor_role(user: ->(_) { { email: "ada@example.com", name: "Ada" } })
+    assert_equal "member", visitor_role(user: ->(_) { { "email" => "ada@example.com", "name" => "Ada", "role" => "" } })
+    assert_equal "member", visitor_role(user: ->(_) { { email: "ada@example.com", name: "Ada", role: nil } })
+    assert_equal "admin", visitor_role(user: ->(_) { { email: "ada@example.com", name: "Ada", role: "admin" } }), "a role the app names is kept"
+    assert_equal "member", visitor_role(user: ->(_) { { email: "ada@example.com", name: "Ada", role: "member" } }, default_role: "admin"),
+                 "and is not raised by the default"
+  end
+
+  # INFO 1: the documented RAILWATCH_DASHBOARD_DEFAULT_ROLE did nothing.
+  def test_the_dashboard_default_role_decides_a_visitor_the_app_did_not_name
+    assert_equal "admin", visitor_role(user: nil, default_role: "admin"), "the HTTP Basic user"
+    assert_equal "admin", visitor_role(user: ->(_) { { email: "ada@example.com", name: "Ada" } }, default_role: "admin"), "a config.user without a role"
+    assert_equal "member", visitor_role(user: nil, default_role: "member")
+    assert_equal "member", visitor_role(user: nil, default_role: "owner"), "anything but admin is a member"
+    assert_equal "member", visitor_role(user: nil), "member by default"
+  end
+
+  # The railwatch gem's own setting wins over the environment when the gem
+  # has it (1.6.1 and later); an older gem has the variable read here.
+  def test_the_railwatch_gems_dashboard_default_role_wins_when_it_has_one
+    config = Railwatch.config
+    saved = ENV["RAILWATCH_DASHBOARD_DEFAULT_ROLE"]
+    ENV["RAILWATCH_DASHBOARD_DEFAULT_ROLE"] = "member"
+    config.define_singleton_method(:dashboard_default_role) { "admin" }
+    assert_equal "admin", Railwatch::Sidecar.default_role
+    config.singleton_class.send(:remove_method, :dashboard_default_role)
+    config.define_singleton_method(:dashboard_default_role) { "member" }
+    ENV["RAILWATCH_DASHBOARD_DEFAULT_ROLE"] = "admin"
+    assert_equal "member", Railwatch::Sidecar.default_role
+  ensure
+    config.singleton_class.send(:remove_method, :dashboard_default_role) if config.singleton_methods.include?(:dashboard_default_role)
+    ENV["RAILWATCH_DASHBOARD_DEFAULT_ROLE"] = saved
+  end
+
   def test_without_a_named_user_the_visitor_is_a_member_not_an_admin
     config = Railwatch::Sidecar.config
     saved = config.user

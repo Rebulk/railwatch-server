@@ -6,6 +6,19 @@ and MCP included), behind your app's own login, with no server to install.
 The server runs as **its own process** next to the app, started by Puma's
 master. It never runs inside a Puma worker.
 
+## Upgrading from 0.2.1: security changes (unreleased)
+
+- **A `config.user` that leaves out `role` makes a member, not an admin.**
+  0.2.1 made every visitor an admin when the lambda returned only
+  `{ email:, name: }`. Return `role: "admin"` for the users who should
+  manage tokens, members and integrations.
+- **`RAILWATCH_DASHBOARD_DEFAULT_ROLE` works.** The `railwatch` gem's
+  `c.dashboard_default_role` (`member` by default; `admin` is the only other
+  value) is now the role of every visitor whose role the app did not name:
+  the HTTP Basic user, the single operator, and a `config.user` without
+  `role`. 0.2.1 never read it. With a `railwatch` gem older than 1.6.1 the
+  environment variable is read directly.
+
 ## Upgrading to 0.2.1: security changes
 
 - **A dashboard without a gate is no longer served outside development.**
@@ -184,7 +197,9 @@ end
 ```
 
 Without it, the HTTP Basic user name (or "Operator") is a member; name
-admins with `config.user`. Users are
+admins with `config.user`. A user `config.user` returns without a `role`
+is a member too. `RAILWATCH_DASHBOARD_DEFAULT_ROLE=admin` (the `railwatch`
+gem's `c.dashboard_default_role`) makes both admins instead. Users are
 created in the server on first sight. Nobody signs in to the server itself.
 
 ## AI agents
