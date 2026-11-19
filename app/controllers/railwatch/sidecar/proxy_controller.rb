@@ -198,18 +198,22 @@ module Railwatch
       end
 
       # Who the server should see: Railwatch::Sidecar.config.user when the app
-      # names its user, else the HTTP Basic user, else one operator (both
-      # members).
+      # names its user, else the HTTP Basic user, else one operator. A role
+      # the app did not name is Railwatch::Sidecar.default_role (member):
+      # whoever passes a shared password, or a config.user that leaves the
+      # role out, is not known to be an admin.
       def visitor
         given = Railwatch::Sidecar.config.user&.call(self)
-        return given.to_h.transform_keys(&:to_sym).reverse_merge(role: "admin") if given
+        if given
+          given = given.to_h.transform_keys(&:to_sym)
+          given = given.merge(role: Railwatch::Sidecar.default_role) if given[:role].blank?
+          return given
+        end
 
         basic_user = ActionController::HttpAuthentication::Basic.user_name_and_password(request).first if request.authorization.to_s.start_with?("Basic ")
         # Decoded base64 comes back binary; parameterize needs a real encoding.
         name = basic_user.to_s.dup.force_encoding(Encoding::UTF_8).scrub.presence || "Operator"
-        # A member: whoever passes a shared password is not known to be an
-        # admin. config.user names admins.
-        { email: "#{name.parameterize.presence || 'operator'}@railwatch.invalid", name: name, role: "member" }
+        { email: "#{name.parameterize.presence || 'operator'}@railwatch.invalid", name: name, role: Railwatch::Sidecar.default_role }
       end
 
       def signed_header(secret)

@@ -47,7 +47,8 @@ module Railwatch
         # KILLed and the app boots without the server; the next start retries.
         @setup_timeout = Float(setting("RAILWATCH_SIDECAR_SETUP_TIMEOUT", "30"))
         # Who the dashboard's visitor is, as the server should see them:
-        # ->(controller) { { email:, name:, role: "admin" | "member" } }.
+        # ->(controller) { { email:, name:, role: "admin" | "member" } }. A
+        # role left out is Railwatch::Sidecar.default_role (member).
         @user = nil
         # Whether <mount>/mcp and <mount>/api/ (what an AI agent calls) are
         # signed for the visitor like the dashboard, so the agent needs no

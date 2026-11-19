@@ -62,6 +62,18 @@ module Railwatch
         gem.http_basic_auth_enabled || gem.base_controller_class.to_s.delete_prefix("::") != default
       end
 
+      # The role of a visitor whose role the app did not name: the HTTP
+      # Basic user or the single operator (no config.user), and a user
+      # config.user returns without one. The railwatch gem's
+      # dashboard_default_role (RAILWATCH_DASHBOARD_DEFAULT_ROLE), "member"
+      # unless it says "admin"; a gem older than that setting has the same
+      # environment variable read here.
+      def default_role
+        gem = Railwatch.config
+        role = gem.respond_to?(:dashboard_default_role) ? gem.dashboard_default_role : ENV["RAILWATCH_DASHBOARD_DEFAULT_ROLE"]
+        role.to_s.strip.downcase == "admin" ? "admin" : "member"
+      end
+
       def ungated_message
         "The Railwatch dashboard at #{config.normalized_mount_path} has no gate, so it is not served in #{config.environment}: " \
           "HTTP Basic is off (RAILWATCH_HTTP_BASIC_AUTH_ENABLED=false) and Railwatch.config.base_controller_class is " \
