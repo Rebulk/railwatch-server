@@ -6,7 +6,13 @@ and MCP included), behind your app's own login, with no server to install.
 The server runs as **its own process** next to the app, started by Puma's
 master. It never runs inside a Puma worker.
 
-## Upgrading from 0.2.1: security changes (unreleased)
+## Upgrading to 0.2.2: security changes
+
+0.2.2 bundles railwatch-rs v0.3.5, the GA security and tenancy release. Its
+first start runs three small control-database migrations in place; see that
+release's CHANGELOG. Through the sidecar, a user now stays in the account the
+sidecar serves, at most at the role it signs: no switching into other
+accounts, and tokens made there keep that role.
 
 - **A `config.user` that leaves out `role` makes a member, not an admin.**
   0.2.1 made every visitor an admin when the lambda returned only
