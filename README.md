@@ -6,6 +6,13 @@ and MCP included), behind your app's own login, with no server to install.
 The server runs as **its own process** next to the app, started by Puma's
 master. It never runs inside a Puma worker.
 
+## Upgrading to 0.2.3
+
+0.2.3 bundles railwatch-rs v0.3.6: two low-severity fixes from the second
+GA review (`/up` reads the control database at most once a second, and a
+source-map upload racing its environment's deletion is refused). No
+migrations and no configuration changes.
+
 ## Upgrading to 0.2.2: security changes
 
 0.2.2 bundles railwatch-rs v0.3.5, the GA security and tenancy release. Its
