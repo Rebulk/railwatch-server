@@ -2,9 +2,9 @@
 
 module Railwatch
   module Sidecar
-    VERSION = "0.2.2"
+    VERSION = "0.2.3"
     # The published railwatch-rs commit the bundled binaries are built from
     # (README, "The server side"); its source.
-    RAILWATCH_RS = "b2c5542eea4655a24e225abbc54ce4c7a0285151"
+    RAILWATCH_RS = "7a929891b0f2f439e89ef59b85ed032fe5562656"
   end
 end

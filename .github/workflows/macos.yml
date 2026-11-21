@@ -24,7 +24,7 @@ permissions:
   contents: read
 
 env:
-  RAILWATCH_RS_SHA: b2c5542eea4655a24e225abbc54ce4c7a0285151  # v0.3.5
+  RAILWATCH_RS_SHA: 7a929891b0f2f439e89ef59b85ed032fe5562656  # v0.3.6
   RUST_TOOLCHAIN: 1.99.1
   CARGO_BUILD_JOBS: "4"
 
@@ -105,7 +105,7 @@ jobs:
           # build used the 11.3 SDK); checked below with vtool.
           MACOSX_DEPLOYMENT_TARGET: "11.0"
           # What `railwatch version` reports, as railwatch-rs's release sets it.
-          RAILWATCH_VERSION: v0.3.5
+          RAILWATCH_VERSION: v0.3.6
           RUSTFLAGS: "--remap-path-prefix=${{ github.workspace }}/railwatch-rs=. -C strip=symbols"
         run: cargo build --release --locked -p railwatch-server --bin railwatch
       - name: place, ad-hoc sign, inspect
